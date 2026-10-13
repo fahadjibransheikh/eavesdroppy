@@ -37,6 +37,11 @@ enum CallEventFilter {
     }
 
     /// "Name", else the address without `mailto:`.
+    /// The event a call that just started most likely belongs to: the one whose start is nearest to `now`.
+    static func nearest(_ events: [CallEvent], now: Date) -> CallEvent? {
+        events.min { abs($0.start.timeIntervalSince(now)) < abs($1.start.timeIntervalSince(now)) }
+    }
+
     static func displayName(name: String?, url: URL?) -> String? {
         if let n = name?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty { return n }
         guard let u = url?.absoluteString, !u.isEmpty else { return nil }
@@ -54,22 +59,22 @@ final class CalendarWatcher: @unchecked Sendable {
 
     var authorized: Bool { EKEventStore.authorizationStatus(for: .event) == .fullAccess }
 
-    /// Call events in the offer window now (see `CallEventFilter.inWindow`). Empty without access.
-    func upcoming(now: Date = Date(), done: @escaping ([CallEvent]) -> Void) {
+    /// Call events in the offer window now (see `CallEventFilter.inWindow`; `lead` and `grace` widen it). Empty without access.
+    func upcoming(now: Date = Date(), lead: TimeInterval = 60, grace: TimeInterval = 300, done: @escaping ([CallEvent]) -> Void) {
         q.async { [self] in
             guard authorized else { DispatchQueue.main.async { done([]) }; return }
             let store = self.store ?? EKEventStore()
             self.store = store
-            let pred = store.predicateForEvents(withStart: now.addingTimeInterval(-300), end: now.addingTimeInterval(61), calendars: nil)
-            let events = store.events(matching: pred).compactMap { Self.callEvent($0, now: now) }
+            let pred = store.predicateForEvents(withStart: now.addingTimeInterval(-grace), end: now.addingTimeInterval(lead + 1), calendars: nil)
+            let events = store.events(matching: pred).compactMap { Self.callEvent($0, now: now, lead: lead, grace: grace) }
                 .sorted { $0.start < $1.start }
             DispatchQueue.main.async { done(events) }
         }
     }
 
-    private static func callEvent(_ e: EKEvent, now: Date) -> CallEvent? {
+    private static func callEvent(_ e: EKEvent, now: Date, lead: TimeInterval, grace: TimeInterval) -> CallEvent? {
         guard !e.isAllDay, e.status != .canceled, let start = e.startDate, let end = e.endDate,
-              CallEventFilter.inWindow(start: start, end: end, now: now) else { return nil }
+              CallEventFilter.inWindow(start: start, end: end, now: now, lead: lead, grace: grace) else { return nil }
         let people = e.attendees ?? []
         if people.first(where: \.isCurrentUser)?.participantStatus == .declined { return nil }
         let others = people.filter { !$0.isCurrentUser && $0.participantType != .resource && $0.participantType != .group }

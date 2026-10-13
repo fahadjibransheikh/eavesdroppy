@@ -209,20 +209,37 @@ import SwiftUI
                     }
                     guard !self.droplet.recording, !self.droplet.busy, !self.prompt.active else { self.micPrompted = true; return }
                     self.micPrompted = true
-                    self.showCallPrompt(app)
+                    self.eventForCall { ev in
+                        guard self.droplet.host != nil, !self.droplet.recording, !self.droplet.busy, !self.prompt.active else { return }
+                        self.showCallPrompt(app, event: ev)
+                    }
                 }
             }
         }
     }
 
-    private func showCallPrompt(_ app: String) {
-        prompt.show(.call, title: "Recording a call?", subtitle: "\(app) is using the microphone", primary: "Record", secondary: "Dismiss",
+    /// A calendar event starting within 15 minutes (or begun in the last 30) names the call and brings its attendees.
+    /// Only with Calendar access and the calendar setting on: nothing here reads the calendar for a user who has not asked.
+    private func eventForCall(_ done: @escaping @MainActor (CallEvent?) -> Void) {
+        guard prefs.calendarPrompt, calendarStatus == .granted else { done(nil); return }
+        let ep = currentEpoch()
+        let now = Date()
+        calendar.upcoming(now: now, lead: 15 * 60, grace: 30 * 60) { events in
+            MainActor.assumeIsolated { done(ep == currentEpoch() ? CallEventFilter.nearest(events, now: now) : nil) }
+        }
+    }
+
+    private func showCallPrompt(_ app: String, event ev: CallEvent? = nil) {
+        if let ev { prompted.insert(ev.key) }  // the event prompt must not ask again for this meeting
+        let title = ev.map { "Record “\($0.title)”?" } ?? "Record this \(app) call?"
+        let subtitle = ev.map { "\(app) · \($0.subtitle)" } ?? "\(app) is using your microphone"
+        prompt.show(.call, title: title, subtitle: subtitle, primary: "Record", secondary: "Dismiss",
                     symbol: "mic.fill",
                     onPrimary: { [weak self] in
                         self?.dismissPrompt()
-                        self?.droplet.startRecording(title: "\(app) call", attendees: [], autoStarted: false)
+                        self?.droplet.startRecording(title: ev?.title ?? "\(app) call", attendees: ev?.attendees ?? [], autoStarted: false)
                     }, onSecondary: { [weak self] in self?.dismissPrompt() })
-        present(duration: 45, priority: .normal, label: "Recording a call? \(app) is using the microphone")
+        present(duration: 20, priority: .normal, label: "\(title) \(subtitle)")
     }
 
     // MARK: recording hooks (called by the droplet)
@@ -351,6 +368,7 @@ import SwiftUI
         switch which {
         case "event": showEventPrompt(CallEvent(key: "demo", title: "Weekly sync", start: Date().addingTimeInterval(45), attendees: ["Priya Nair", "Sam Lee", "Dana Cruz"], hasLink: true))
         case "call": showCallPrompt("Zoom")
+        case "callevent": showCallPrompt("Zoom", event: CallEvent(key: "demo", title: "Weekly sync", start: Date().addingTimeInterval(-120), attendees: ["Priya Nair", "Sam Lee", "Dana Cruz"], hasLink: true))
         case "ending":
             countdownEnd = Date().addingTimeInterval(11); startCountdown(); prompt.update(subtitle: "Stopping in 11 s")
         default: break

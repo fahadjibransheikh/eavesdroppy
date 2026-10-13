@@ -95,3 +95,22 @@ import Testing
         #expect(LibraryModel.transcriptText(t) == "Me [00:00]: Hi\nPriya [1:02:05]: Hello")
     }
 }
+
+@Suite struct StageAndCallTests {
+    @Test func stageFollowsTheLastFinishedStage() {
+        #expect(processingStage(afterLog: "stage track prep done at +0.4 s") == "Cleaning up audio")
+        #expect(processingStage(afterLog: "stage echo done at +1.0 s") == "Transcribing")
+        #expect(processingStage(afterLog: "stage transcription done at +30.2 s") == "Finding speakers")
+        #expect(processingStage(afterLog: "stage diarization done at +40.0 s") == "Naming speakers")
+        #expect(processingStage(afterLog: "stage naming done at +41.0 s") == "Writing notes")
+        #expect(processingStage(afterLog: "stage notes and folder done at +60.0 s") == nil)  // finished: the job leaves the list
+        #expect(processingStage(afterLog: "WARNING: something") == nil)
+    }
+
+    @Test func nearestEventIsTheOneStartingClosestToNow() {
+        let now = Date()
+        func ev(_ k: String, _ off: TimeInterval) -> CallEvent { CallEvent(key: k, title: k, start: now.addingTimeInterval(off), attendees: [], hasLink: true) }
+        #expect(CallEventFilter.nearest([ev("late", 600), ev("started", -120), ev("earlier", -1500)], now: now)?.key == "started")
+        #expect(CallEventFilter.nearest([], now: now) == nil)
+    }
+}

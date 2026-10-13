@@ -18,7 +18,7 @@ public final class EavesdroppyPrincipal: NSObject, DropletPrincipal {
     @MainActor public func makeDroplet() -> AnyObject { EavesdroppyDroplet() }
 }
 
-struct Job: Identifiable { let dir: URL; let title: String; var id: URL { dir } }
+struct Job: Identifiable { let dir: URL; let title: String; var stage: String?; var id: URL { dir } }
 struct FailedJob: Identifiable { let dir: URL; let title: String; let reason: String?; var id: URL { dir } }
 
 private enum Phase { case idle, starting, recording, stopping }
@@ -499,9 +499,14 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         let epoch = currentEpoch()
         work.async {
             guard currentEpoch() == epoch else { return }  // deactivated while queued
-            let r = processSession(dir, epoch: epoch)
+            let r = processSession(dir, epoch: epoch, stage: { s in onMain { self.setStage(dir, s, epoch) } })
             onMain { self.finished(dir, title, r, epoch) }
         }
+    }
+
+    private func setStage(_ dir: URL, _ stage: String, _ epoch: Int) {
+        guard epoch == currentEpoch(), let i = pending.firstIndex(where: { $0.dir == dir }), pending[i].stage != stage else { return }
+        pending[i].stage = stage
     }
 
     private func finished(_ dir: URL, _ title: String, _ r: Outcome, _ epoch: Int) {
@@ -711,7 +716,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     /// Harness only (EAVESDROPPY_HARNESS_DEMO=rows): a job being written, a failed one and three recent meetings.
     func demoRows() {
-        pending = [Job(dir: sessionsDir.appendingPathComponent("demo-a"), title: "Design review")]
+        pending = [Job(dir: sessionsDir.appendingPathComponent("demo-a"), title: "Design review", stage: "Transcribing")]
         failed = [FailedJob(dir: sessionsDir.appendingPathComponent("demo-b"), title: "Customer call", reason: "The notes tool is not installed")]
         let now = Date()
         func iso(_ ago: TimeInterval) -> String { ISO8601DateFormatter().string(from: now.addingTimeInterval(-ago)) }
@@ -891,7 +896,7 @@ private struct EavesdroppyWidget: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(droplet.pending) { j in
-                    row("hourglass", "Writing notes · \(j.title)")
+                    row("hourglass", "\(j.stage ?? "Queued") · \(j.title)")
                 }
                 ForEach(droplet.failed) { f in
                     VStack(alignment: .leading, spacing: 0) {

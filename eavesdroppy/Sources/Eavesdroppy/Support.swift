@@ -323,7 +323,22 @@ enum NativeSeams {
 /// Blocking. Processes a session dir; on success deletes it (the m4a in the output folder and <container>/raw are the archive).
 /// After `limit` (the 3 h watchdog) the job is stopped and fails with a readable reason. A cancel (deactivation) or a crash keeps
 /// the session and its raw audio; the next activation resumes it.
-func processSession(_ dir: URL, epoch ep: Int, timeout limit: TimeInterval = processWatchdog) -> Outcome {
+/// What the pipeline is doing now, from the line it just logged ("stage transcription done at +12.3 s" means the next
+/// stage is speaker finding). nil for any other line. The stage list is Processor.run's `mark(...)` calls, in order.
+func processingStage(afterLog line: String) -> String? {
+    guard line.hasPrefix("stage "), let end = line.range(of: " done at") else { return nil }
+    switch line[line.index(line.startIndex, offsetBy: 6)..<end.lowerBound] {
+    case "track prep": return "Cleaning up audio"
+    case "echo": return "Transcribing"
+    case "transcription": return "Finding speakers"
+    case "diarization": return "Naming speakers"
+    case "naming", "mix", "raw archive": return "Writing notes"
+    default: return nil
+    }
+}
+
+/// `stage` is told what the native pipeline is doing as it goes (from a background thread); the Python fallback is silent.
+func processSession(_ dir: URL, epoch ep: Int, timeout limit: TimeInterval = processWatchdog, stage: @escaping (String) -> Void = { _ in }) -> Outcome {
     let fm = FileManager.default
     let marker = dir.appendingPathComponent(".processing")
     if !fm.fileExists(atPath: dir.appendingPathComponent("meta.json").path) {  // an old session, or a crash before meta.json existed
@@ -347,7 +362,7 @@ func processSession(_ dir: URL, epoch ep: Int, timeout limit: TimeInterval = pro
     #if EAVESDROPPY_PERSONAL
     if Pipeline.usePython { return processSessionPython(dir, epoch: ep, limit: limit, logPath: logPath, fail: fail) }
     #endif
-    return processSessionNative(dir, epoch: ep, limit: limit, attempt: attempt, marker: marker, logPath: logPath, fail: fail)
+    return processSessionNative(dir, epoch: ep, limit: limit, attempt: attempt, marker: marker, logPath: logPath, stage: stage, fail: fail)
 }
 
 private final class NativeBox: @unchecked Sendable {
@@ -358,15 +373,19 @@ private final class NativeBox: @unchecked Sendable {
 
 /// The meeting job, in-process (D22): a detached Task at .utility priority, cancelled by cancelPipeline().
 private func processSessionNative(_ dir: URL, epoch ep: Int, limit: TimeInterval, attempt: Int, marker: URL, logPath: URL,
-                                  fail: (String, Bool) -> Outcome) -> Outcome {
+                                  stage: @escaping (String) -> Void, fail: (String, Bool) -> Outcome) -> Outcome {
     let fm = FileManager.default
     fm.createFile(atPath: logPath.path, contents: nil)   // a fresh log per attempt, as the Python's stderr redirect was
     let logHandle = try? FileHandle(forWritingTo: logPath)
     let logLock = NSLock()
-    func plog(_ s: String) { logLock.withLock { try? logHandle?.write(contentsOf: Data((s + "\n").utf8)) } }
+    func plog(_ s: String) {
+        logLock.withLock { try? logHandle?.write(contentsOf: Data((s + "\n").utf8)) }
+        if let st = processingStage(afterLog: s) { stage(st) }
+    }
     defer { try? logHandle?.close() }
     if ep != currentEpoch() { try? Data("\(attempt - 1)".utf8).write(to: marker); return .failed("cancelled") }
     log("pipeline started \(dir.lastPathComponent) (attempt \(attempt))")
+    stage("Preparing audio")
     let box = NativeBox(), done = DispatchSemaphore(value: 0)
     let outRoot = outputRoot()
     let task = Task.detached(priority: .utility) {

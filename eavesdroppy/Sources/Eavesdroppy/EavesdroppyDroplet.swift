@@ -82,7 +82,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private(set) var notesFocused = false
 
     var recording: Bool { phase == .recording }
-    var notesInNotch: Bool { prefs.notesInNotch }
+    /// Droppy can refuse the library surface ("does not publish a surface with that id", seen with approved local
+    /// builds); the notes then live in the shelf widget instead, whatever the setting says.
+    @Published private(set) var surfaceRefused = false
+    var notesInNotch: Bool { prefs.notesInNotch && !surfaceRefused }
 
     var busy: Bool { phase == .starting || phase == .stopping }
     var starting: Bool { phase == .starting }
@@ -271,7 +274,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         }
         startedAutomatically = false
         _ = host?.shelf.invalidateLayout(for: Self.widgetID)  // the widget grows a notes field while recording
-        if prefs.notesInNotch { showNotesInNotch() }
+        if notesInNotch { showNotesInNotch() }
     }
 
     private func tick() {
@@ -369,6 +372,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     func presentLibrary() {
         presentation = host?.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
+        guard presentation == nil, let host else { return }
+        if !surfaceRefused { surfaceRefused = true; host.shelf.invalidateLayout(for: Self.widgetID) }
+        _ = host.shelf.open(revealing: Self.widgetID)
+        _ = host.shelf.requestKeyboardFocus()
     }
 
     /// Settings -> Storage: adds meetings already in the Drive folder to the library (idempotent on the Python side).
@@ -659,7 +666,7 @@ extension EavesdroppyDroplet: ShelfWidgetProviding {
                 layoutTraits: ShelfWidgetLayoutTraits(
                     preferredSoloWidth: 420,
                     preferredPairedWidth: 210,
-                    contentHeight: .fixed(recording && !prefs.notesInNotch ? 300 : 170)  // room for typed notes
+                    contentHeight: .fixed(recording && !notesInNotch ? 300 : 170)  // room for typed notes
                 ),
                 focusPolicy: .keyboardFocusable
             )

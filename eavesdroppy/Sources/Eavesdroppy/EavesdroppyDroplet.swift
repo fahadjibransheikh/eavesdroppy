@@ -31,6 +31,11 @@ private let notesQ = DispatchQueue(label: "eavesdroppy.notes", qos: .utility)
 
 private let silentCallAudio = "Call audio was silent — check Screen & System Audio Recording permission for Droppy"
 
+/// Seconds without a single call-audio sample before the permission warning. The system tap can take ~40 s to
+/// deliver its first buffer and then record fine, so anything shorter is a false alarm.
+private let silentCallAudioGrace = 60
+func callAudioMissing(elapsed: Int, frames: Int64) -> Bool { elapsed >= silentCallAudioGrace && frames == 0 }
+
 /// Records mic + call audio, then hands the session to process_meeting.py.
 @MainActor
 public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
@@ -280,10 +285,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private func tick() {
         guard let s = session else { return }
         elapsed = Int(Date().timeIntervalSince(s.start))
-        // No call audio at all 10 s in: the permission is almost certainly off.
-        if elapsed >= 10, !systemChecked {
+        // No call audio at all after a full minute: the permission is almost certainly off.
+        if !systemChecked, let st = recorder?.system, callAudioMissing(elapsed: elapsed, frames: st.frames) {
             systemChecked = true
-            if let st = recorder?.system, st.frames == 0 { addWarning(silentCallAudio) }
+            addWarning(silentCallAudio)
         }
         automation.tick(elapsed: elapsed)
     }

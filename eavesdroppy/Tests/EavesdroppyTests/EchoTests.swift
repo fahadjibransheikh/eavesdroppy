@@ -82,6 +82,51 @@ import Testing
         }
     }
 
+    @Test func shiftReferenceTargetAndReductionMatchPython() throws {
+        let h = try F.json("echo")["helpers"] as! [String: Any]
+        for c in h["shift_reference_target"] as! [[String: Any]] {
+            let got = Echo.shiftReference(F.f(c["x"]), lagMs: F.i(c["lag"]), n: F.i(c["n"]), targetMs: F.i(c["target"]))
+            #expect(Array(got.prefix(3)) == F.f(c["expected_head"]) && got.reduce(0.0) { $0 + Double($1) } == F.d(c["expected_sum"]),
+                    "shift_reference lag \(F.i(c["lag"])) target \(F.i(c["target"])) n \(F.i(c["n"]))")
+        }
+        for c in h["reduction"] as! [[String: Any]] {
+            let win = { (v: Any) -> [Echo.Window] in (v as! [Any]).map { Echo.Window(t: 0, score: $0 is NSNull ? nil : F.d($0), lagMs: nil) } }
+            let want = c["expected"] is NSNull ? nil : F.d(c["expected"])
+            #expect(Echo.reduction(win(c["mic"]!), win(c["out"]!)) == want, "reduction \(c["mic"]!) -> \(c["out"]!)")
+        }
+    }
+
+    /// Stand-in for LocalVQE: records the references it was given; `passThrough` returns the mic untouched for the first n calls.
+    final class FakeRemover: EchoRemover, @unchecked Sendable {
+        let lock = NSLock(); var refs: [[Float]] = []; let passThrough: Int; let cancel: [Float]
+        init(passThrough: Int, cancel: [Float]) { self.passThrough = passThrough; self.cancel = cancel }
+        func clean(mic: [Float], reference: [Float]) throws -> [Float] {
+            lock.withLock { refs.append(reference) }
+            return lock.withLock { refs.count } <= passThrough ? mic : cancel
+        }
+    }
+
+    @Test func chunkWithoutEchoIsNotRunAndAFlakyModelIsRetried() throws {
+        let r: [String: Any] = ["seconds": 25, "seeds": [101, 202, 303], "gain_echo": 0.4, "delay_samples": 960, "near_gain": 0.3, "floor": 0.01, "sys_scale": 0.5]
+        let (mic, sys) = Self.synth(r)
+        // echo present: the first two answers leave the echo in, the third is the near end alone (a perfect canceller)
+        let (nearOnly, _) = Self.synth(r.merging(["gain_echo": 0.0]) { $1 })
+        let fake = FakeRemover(passThrough: 2, cancel: nearOnly)
+        let y = try Echo.cleanChunk(mic: mic, system: sys, lagMs: 60, remover: fake, plans: Echo.Plans())
+        #expect(y == nearOnly && fake.refs.count == 3)
+        #expect(fake.refs[1] != fake.refs[0] && fake.refs[2] != fake.refs[1])   // each retry moves the reference
+        // no coherent echo (the mic has none): LocalVQE is never called
+        let none = FakeRemover(passThrough: 0, cancel: nearOnly)
+        #expect(try Echo.cleanChunk(mic: nearOnly, system: sys, lagMs: 60, remover: none, plans: Echo.Plans()) == nil && none.refs.isEmpty)
+        // a model that never cancels: every candidate is tried, the best (all equal) is returned, the self-check fails
+        let stuck = FakeRemover(passThrough: 99, cancel: nearOnly)
+        let ys = try Echo.cleanChunk(mic: mic, system: sys, lagMs: 60, remover: stuck, plans: Echo.Plans())
+        #expect(ys == mic && stuck.refs.count == 1 + Echo.retryLagsMs.count)
+        let chk = Echo.selfCheck(mic: mic, out: mic, system: sys, lagMs: 60)
+        #expect(!chk.ok && abs(chk.reductionEchoDb ?? 99) < 0.5)
+        #expect(Echo.selfCheck(mic: mic, out: nearOnly, system: sys, lagMs: 60).ok)
+    }
+
     @Test func resamplePolyMatchesScipy() throws {
         for c in try F.json("echo")["resample"] as! [[String: Any]] {
             let rate = F.i(c["rate"]), n = F.i(c["n"])

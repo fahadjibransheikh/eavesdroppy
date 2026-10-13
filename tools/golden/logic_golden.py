@@ -611,6 +611,13 @@ def echo_fixture():
                              "expected_len": len(echo.shift_reference(np.arange(1, 3200, dtype=np.float32)[:2400], lag, n)),
                              "expected_sum": float(echo.shift_reference(np.arange(1, 3200, dtype=np.float32)[:2400], lag, n).astype(np.float64).sum())}
                             for lag in (-500, -50, 0, 39, 40, 60, 800) for n in (100, 2400, 3000)],
+        "shift_reference_target": [{"lag": lag, "target": tgt, "n": n, "x": [float(v) for v in np.arange(1, 3200, dtype=np.float32)[:2400]],
+                                    "expected_head": [float(v) for v in echo.shift_reference(np.arange(1, 3200, dtype=np.float32)[:2400], lag, n, tgt)[:3]],
+                                    "expected_sum": float(echo.shift_reference(np.arange(1, 3200, dtype=np.float32)[:2400], lag, n, tgt).astype(np.float64).sum())}
+                                   for lag in (-50, 20, 60, 250) for tgt in (100, 160, 400) for n in (100, 3000)],
+        "reduction": [{"mic": m_, "out": o_, "expected": echo._reduction([{"score": v} for v in m_], [{"score": v} for v in o_])}
+                      for m_, o_ in (([0.5, None, 0.01], [0.0, None, 0.0]), ([0.01, None], [0.0, 0.0]), ([0.5], [0.5]), ([0.9, 0.5], [0.01, 0.5]),
+                                     ([0.95, 0.3, 0.02], [0.004, 0.2, 0.0]), ([0.5, 0.4], [None, 0.01]), ([], []))],
     }
 
     # resampler vs scipy

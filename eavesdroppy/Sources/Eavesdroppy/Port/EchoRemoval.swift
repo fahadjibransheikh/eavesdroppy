@@ -7,6 +7,8 @@ import Foundation
 extension Echo {
     static let chunkS = 30, overlapS = 2   // CHUNK_S, OVERLAP_S
     static let minReductionDb = 3.0, maxNearLossDb = 3.0   // MIN_REDUCTION_DB, MAX_NEAR_LOSS_DB
+    static let nullCoh = 0.003, chunkGoodDb = 6.0   // NULL_COH, CHUNK_GOOD_DB
+    static let retryLagsMs = [160, 240, 100, 400]   // RETRY_LAGS_MS
     static let fr = 320   // FR
 
     struct SelfCheck: Equatable { var reductionEchoDb: Double?; var nearChangeDb: Double?; var ok: Bool }
@@ -51,23 +53,31 @@ extension Echo {
 
     private static func dB(_ a: Double, _ b: Double) -> Double { 10 * log10(a / max(b, 1e-20)) }
 
-    /// echo.self_check. Echo-dominant frames (system active, mic in the quieter half of those) must get >= 3 dB quieter;
-    /// system-silent frames (near end alone) must keep their energy within 3 dB.
-    static func selfCheck(mic micIn: [Float], out outIn: [Float], system sysIn: [Float]) -> SelfCheck {
+    /// echo._reduction: echo-to-rest ratio before/after, dB, over the windows where the mic is coherent with the reference
+    /// (score >= bleedThr). Coherence g = E / (E + rest), so g / (1 - g) = E / rest. nil = no echo window to judge.
+    static func reduction(_ mic: [Window], _ out: [Window]) -> Double? {
+        var before = 0.0, after = 0.0, n = 0
+        for (a, b) in zip(mic, out) {
+            guard let sa = a.score, sa >= bleedThr, let sb = b.score else { continue }
+            let g = min(sa, 0.999), h = min(max(sb.isNaN ? 0 : sb, nullCoh), 0.999)
+            before += g / (1 - g); after += h / (1 - h); n += 1
+        }
+        return n > 0 ? PyRound.round(10 * log10(before / after), 1) : nil
+    }
+
+    /// echo.self_check. reduction_echo_dB: in the windows where the mic is coherent with the system track (echo present) the
+    /// echo-to-rest ratio must fall by >= 3 dB (energy is the wrong yardstick, see echo.py); system-silent frames (near end
+    /// alone) must keep their energy within 3 dB. lagMs < 0: the reference is advanced first.
+    static func selfCheck(mic micIn: [Float], out outIn: [Float], system sysIn: [Float], lagMs: Int = 0, plans: Plans = Plans()) -> SelfCheck {
         let n = min(micIn.count, outIn.count, sysIn.count)
         let mic = Array(micIn.prefix(n)), out = Array(outIn.prefix(n)), sys = Array(sysIn.prefix(n))
         var sa = active(sys, db: -45)
         var mf = frames(mic), of = frames(out)
         let k = min(sa.count, mf.count)
         sa = Array(sa.prefix(k)); mf = Array(mf.prefix(k)); of = Array(of.prefix(k))
-        var red: Double?, near: Double?
-        if sa.filter({ $0 }).count >= 20 {
-            let r = mf.map(rms)
-            let act = (0..<k).filter { sa[$0] }.map { r[$0] }.sorted()
-            let med = act.count % 2 == 1 ? act[act.count / 2] : (act[act.count / 2 - 1] + act[act.count / 2]) / 2   // np.median in float32
-            let ech = (0..<k).filter { sa[$0] && r[$0] <= med }
-            red = PyRound.round(dB(energy(ech.map { mf[$0] }), energy(ech.map { of[$0] })), 1)
-        }
+        var near: Double?
+        let ref = lagMs < 0 ? shiftReference(sys, lagMs: lagMs, n: n) : sys
+        let red = reduction(windowScoresCoh(mic, ref, plans: plans), windowScoresCoh(out, ref, plans: plans))
         // binary_dilation(sa, iterations=15): every active frame claims 15 frames each side
         var dil = [Bool](repeating: false, count: k)
         var lastOn = -1000
@@ -80,6 +90,25 @@ extension Echo {
         }
         let ok = red != nil && red! >= minReductionDb && (near == nil || near! >= -maxNearLossDb)
         return SelfCheck(reductionEchoDb: red, nearChangeDb: near, ok: ok)
+    }
+
+    /// echo._clean_chunk: the cleaned chunk, or nil when the mic shows no coherent echo (nothing to remove; LocalVQE adds
+    /// energy at pings and clicks on a sparse system track). The standalone LocalVQE sometimes returns a clip untouched
+    /// (0.3 dB instead of 11-19 dB on a 34 s clip with a 260 ms echo; deterministic, flips with the echo lag and the clip
+    /// bounds), visible as an unchanged echo window: retry at `retryLagsMs` and keep the best.
+    static func cleanChunk(mic m: [Float], system s: [Float], lagMs lag: Int, remover: any EchoRemover, plans: Plans) throws -> [Float]? {
+        let ref = shiftReference(s, lagMs: lag, n: m.count)
+        let micScores = windowScoresCoh(m, ref, plans: plans)
+        guard micScores.contains(where: { ($0.score ?? -1) >= bleedThr }) else { return nil }
+        var best: [Float]?, bestDb = 0.0
+        for target in [nil] + retryLagsMs.map(Optional.some) {
+            try Task.checkCancellation()
+            let y = try remover.clean(mic: m, reference: target == nil ? ref : shiftReference(s, lagMs: lag, n: m.count, targetMs: target))
+            let db = reduction(micScores, windowScoresCoh(y, ref, plans: plans)) ?? 0
+            if best == nil || db > bestDb { best = y; bestDb = db }
+            if bestDb >= chunkGoodDb { break }
+        }
+        return best
     }
 
     /// echo.process: arrays -> (cleaned, per-chunk lags, global lag). Each chunk gets its own lag estimate and reference
@@ -97,15 +126,10 @@ extension Echo {
             try Task.checkCancellation()
             let lo = max(0, a - ov), hi = min(n, b + ov)
             let m = Array(mic[lo..<hi]), s = Array(system[lo..<hi])
-            let y: [Float]
-            let loud = s.reduce(0) { $0 + (abs($1) > 1e-4 ? 1 : 0) }
-            if Double(loud) / Double(s.count) < 0.01 {  // reference silent: nothing to cancel
-                y = m; lags.append(nil)
-            } else {
-                let lag = m.count > 10 * sr ? estimateLagMs(m, s, segS: chunkS, plans: plans) : glag
-                lags.append(lag)
-                y = try remover.clean(mic: m, reference: shiftReference(s, lagMs: lag, n: m.count))
-            }
+            let lag = m.count > 10 * sr ? estimateLagMs(m, s, segS: chunkS, plans: plans) : glag
+            let cleaned = try cleanChunk(mic: m, system: s, lagMs: lag, remover: remover, plans: plans)
+            lags.append(cleaned == nil ? nil : lag)
+            let y = cleaned ?? m
             for i in 0..<m.count {
                 let t = lo + i
                 var w: Float = 1
@@ -139,7 +163,7 @@ extension Echo {
             return Removal(failed: true, reason: PyText.prefix(why, 300),
                            selfCheck: nil, lagMs: nil, chunkLagsMs: [], seconds: secs(), cleaned: mic)
         }
-        let chk = selfCheck(mic: mic, out: r.cleaned, system: system)
+        let chk = selfCheck(mic: mic, out: r.cleaned, system: system, lagMs: r.globalLag)
         var failed = false, reason: String?
         if !chk.ok {
             failed = true

@@ -157,10 +157,11 @@ enum Echo {
     }
 
     /// Reference cropped/padded to n samples. If the mic echo leads or barely trails it (lag < 40 ms) the reference is
-    /// advanced so the echo lag becomes ~targetLagMs; otherwise it is left alone.
-    static func shiftReference(_ ref: [Float], lagMs: Int, n: Int) -> [Float] {
-        let adv = lagMs < 40 ? sr * max(0, targetLagMs - lagMs) / 1000 : 0
-        var r = Array(ref.dropFirst(adv).prefix(n))
+    /// advanced so the echo lag becomes ~targetLagMs; otherwise it is left alone. `targetMs`: always move the echo lag
+    /// to that value instead (advance, or delay with leading zeros).
+    static func shiftReference(_ ref: [Float], lagMs: Int, n: Int, targetMs: Int? = nil) -> [Float] {
+        let adv = targetMs.map { sr * ($0 - lagMs) / 1000 } ?? (lagMs < 40 ? sr * max(0, targetLagMs - lagMs) / 1000 : 0)
+        var r = adv >= 0 ? Array(ref.dropFirst(adv).prefix(n)) : Array(([Float](repeating: 0, count: -adv) + ref).prefix(n))
         if r.count < n { r += [Float](repeating: 0, count: n - r.count) }
         return r
     }

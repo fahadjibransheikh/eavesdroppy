@@ -5,8 +5,6 @@ import SwiftUI
 /// `<session>/notes.txt`; this view is the same in the shelf widget and the expanded surface.
 struct TypedNotes: View {
     @ObservedObject var droplet: EavesdroppyDroplet
-    /// In the menu bar there is no shelf to hold open or to ask for key focus.
-    var inMenu = false
 
     var body: some View {
         DroppyMarkdownEditor(
@@ -14,10 +12,10 @@ struct TypedNotes: View {
             context: DroppyMarkdownEditorContext(
                 documentID: droplet.session?.dir.path,
                 placeholder: "Type notes while you talk…",
-                onFocusChange: { if !inMenu { droplet.notesFocusChanged($0) } }))
+                onFocusChange: { droplet.notesFocusChanged($0) }))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The shelf takes key focus only when asked, as for the title field.
-            .simultaneousGesture(TapGesture().onEnded { if !inMenu { droplet.focusTitle() } })
+            .simultaneousGesture(TapGesture().onEnded { droplet.focusTitle() })
     }
 }
 

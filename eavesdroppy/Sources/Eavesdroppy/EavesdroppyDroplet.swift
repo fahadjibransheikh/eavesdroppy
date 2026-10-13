@@ -840,10 +840,9 @@ private struct MenuBarContent: View {
                     Spacer(minLength: 0)
                     Text(droplet.clock).font(.system(size: 13, weight: .semibold)).monospacedDigit()
                 }
-                // Whether a text editor takes keys inside the host's menu is unverified; "Show notes in notch" is the fallback.
-                TypedNotes(droplet: droplet, inMenu: true)
-                    .frame(width: 320, height: 160)
                 HStack(spacing: DroppySpacing.sm) {
+                    Button("Notes") { droplet.showNotesInNotch() }
+                        .buttonStyle(DroppyQuietButtonStyle(size: .small))
                     Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
                         .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
                         .disabled(droplet.busy)
@@ -852,14 +851,12 @@ private struct MenuBarContent: View {
                         .buttonStyle(DroppyAccentButtonStyle(color: .red, size: .small))
                         .disabled(droplet.busy)
                 }
-                Button("Show notes in notch") { droplet.showNotesInNotch() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
             } else {
                 Button("Record") { droplet.startRecording() }
                     .buttonStyle(DroppyAccentButtonStyle(size: .small))
                     .disabled(droplet.busy)
                 if let status {
-                    Text(status.text).font(.system(size: 11)).lineLimit(2)
+                    Text(status.text).font(.system(size: 11)).lineLimit(1)
                         .foregroundStyle(status.warn ? Color.orange : AdaptiveColors.primaryTextAuto.opacity(0.7))
                 }
                 Button("Open library") { droplet.openLibrary() }
@@ -868,7 +865,8 @@ private struct MenuBarContent: View {
         }
         .foregroundStyle(AdaptiveColors.primaryTextAuto)
         .padding(.vertical, DroppySpacing.xs)
-        .frame(width: 320, alignment: .leading)
+        // Droppy sizes the menu once, at mount, and never re-measures: both states must share one size or one gets clipped.
+        .frame(width: 280, height: 96, alignment: .topLeading)
     }
 
     private var status: (text: String, warn: Bool)? {

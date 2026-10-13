@@ -315,7 +315,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")
         }
         startedAutomatically = false
-        showNotes(focus: false)  // opens by itself, but the meeting app keeps the keyboard
+        if prefs.openNotesOnRecord { showNotes(focus: false) }  // opens by itself, but the meeting app keeps the keyboard
     }
 
     private func tick() {
@@ -415,7 +415,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
                 loadFrame: { [weak self] in self?.host?.preferences.value(forKey: Self.notesFrameKey, default: "") ?? "" },
                 saveFrame: { [weak self] in self?.host?.preferences.setValue($0, forKey: Self.notesFrameKey) })
         }
-        notesPanel?.show(title: "Meeting notes — \(s.title)", focus: focus)
+        notesPanel?.show(title: s.title, focus: focus)
     }
     private static let notesFrameKey = "notesPanelFrame"
 

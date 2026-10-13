@@ -49,6 +49,7 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
                            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                            backing: .buffered, defer: false)
         p.level = .floating
+        p.animationBehavior = .none  // shown from a keyboard shortcut or by the recording starting: no show or close animation
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false  // Droppy is a background app: the default would hide the panel at once
         p.isReleasedWhenClosed = false
@@ -72,11 +73,11 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
         return screens.contains { let i = $0.intersection(r); return i.width >= 100 && i.height >= 40 } ? r : nil
     }
 
-    /// Top right of the screen, clear of the menu bar.
+    /// Bottom right of the screen, above the Dock: the top right is where a call's gallery, participants and chat sit.
     static func defaultFrame(in screen: NSRect?) -> NSRect {
         guard let s = screen else { return NSRect(origin: NSPoint(x: 100, y: 100), size: defaultSize) }
         let size = NSSize(width: min(defaultSize.width, s.width), height: min(defaultSize.height, s.height))
-        return NSRect(x: s.maxX - size.width - 16, y: s.maxY - size.height - 16, width: size.width, height: size.height)
+        return NSRect(x: s.maxX - size.width - 16, y: s.minY + 16, width: size.width, height: size.height)
     }
 
     // MARK: NSWindowDelegate
@@ -121,19 +122,24 @@ final class NotesPanel: NSPanel {
     }
 }
 
-/// What the window shows: a slim header (clock, template) over the notes editor.
+/// What the window shows: a slim header (clock, template, Stop), the audio warning when there is one, and the notes
+/// editor. Stop is here because during a call this window is where the user is looking, not the shelf.
 struct NotesPanelView: View {
     @ObservedObject var droplet: EavesdroppyDroplet
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
             HStack(spacing: DroppySpacing.xsm) {
-                Image(systemName: "record.circle.fill").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.red)
+                Image(systemName: "record.circle.fill").font(.system(size: 12, weight: .medium)).foregroundStyle(StateColor.destructive)
                 Text(droplet.clock).font(.system(size: 12, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
                 Spacer(minLength: 0)
                 TemplateMenu(droplet: droplet)
+                Button("Stop") { droplet.stopRecording(process: true) }
+                    .buttonStyle(DroppyAccentButtonStyle(color: StateColor.destructive, size: .small))
+                    .disabled(droplet.busy)
             }
+            if !droplet.warnings.isEmpty { WarningRow(droplet: droplet).transition(DroppyTransition.element) }
             TypedNotes(droplet: droplet)
         }
         .padding(DroppySpacing.md)

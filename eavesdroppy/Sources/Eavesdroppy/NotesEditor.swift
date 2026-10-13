@@ -28,7 +28,10 @@ struct TemplateMenu: View {
                 }
             }
         } label: {
-            Text(NoteTemplate.name(droplet.recordingTemplate)).font(.system(size: 11, weight: .medium))
+            HStack(spacing: 3) {
+                Text(NoteTemplate.name(droplet.recordingTemplate)).font(.system(size: 11, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))  // says it is a menu
+            }
         }
         .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
         .accessibilityLabel("Notes template")

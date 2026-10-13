@@ -33,6 +33,7 @@ enum NoteTemplate {
     // Recording
     var echoRemoval: Bool { pref(Key.echoRemoval, true) }
     var consentLine: Bool { pref(Key.consentLine, true) }
+    var openNotesOnRecord: Bool { pref(Key.openNotesOnRecord, true) }
     var autoStop: Bool { pref(Key.autoStop, true) }
     var micPrompt: Bool { pref(Key.micPrompt, true) }
     // Speakers
@@ -58,7 +59,7 @@ enum NoteTemplate {
     #endif
 
     enum Key {
-        static let echoRemoval = "echoRemoval", consentLine = "consentLine", autoStop = "autoStop"
+        static let echoRemoval = "echoRemoval", consentLine = "consentLine", autoStop = "autoStop", openNotesOnRecord = "openNotesOnRecord"
         static let userName = "userName", voiceprintNaming = "voiceprintNaming"
         static let defaultTemplate = "defaultTemplate", customTemplate = "customTemplate"
         static let calendarPrompt = "calendarPrompt", calendarAutoStart = "calendarAutoStart"

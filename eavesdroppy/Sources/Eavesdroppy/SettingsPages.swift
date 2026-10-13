@@ -31,6 +31,7 @@ extension EavesdroppyDroplet: SettingsPagesProviding {
     public var settingsSearchEntries: [SettingsSearchEntry] {
         [SettingsSearchEntry(title: "Echo removal", keywords: ["microphone", "recording", "speakers"]),
          SettingsSearchEntry(title: "Consent reminder", keywords: ["recording"]),
+         SettingsSearchEntry(title: "Open the notes window when recording starts", keywords: ["recording", "typed notes", "window"]),
          SettingsSearchEntry(title: "Auto-stop", keywords: ["recording", "call ends"]),
          SettingsSearchEntry(title: "Offer to record when a call starts", keywords: ["microphone", "prompt", "zoom", "teams", "meet"]),
          SettingsSearchEntry(title: "Read participant names", keywords: ["accessibility", "zoom", "teams", "meet", "speakers"]),
@@ -94,6 +95,9 @@ private struct RecordingPage: View {
                 DropletToggleRow(title: "Show a consent reminder",
                                  subtitle: "A one-line reminder to tell people you're recording, when a recording starts.",
                                  isOn: prefs.binding(Prefs.Key.consentLine, true))
+                DropletToggleRow(title: "Open the notes window when recording starts",
+                                 subtitle: "A small window for typing notes while you talk. It never takes the keyboard from your meeting app, and you can open it any time from the shelf or with the shortcut.",
+                                 isOn: prefs.binding(Prefs.Key.openNotesOnRecord, true))
                 DropletToggleRow(title: "Stop when the call ends",
                                  subtitle: "Counts down and stops the recording a minute after the call app stops using the microphone. Recordings that never had a call app, like in-person meetings, are left alone.",
                                  isOn: prefs.binding(Prefs.Key.autoStop, true))

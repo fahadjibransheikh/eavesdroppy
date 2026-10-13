@@ -19,7 +19,7 @@ import Testing
         #expect(NotesPanelController.restoredFrame(NSStringFromRect(NSRect(x: 3000, y: 500, width: 420, height: 340)), screens: screens) == nil)  // unplugged display
         #expect(NotesPanelController.restoredFrame(NSStringFromRect(NSRect(x: 100, y: 100, width: 50, height: 50)), screens: screens) == nil)  // smaller than the minimum
         let d = NotesPanelController.defaultFrame(in: screens[0])
-        #expect(d.maxX == 1440 - 16 && d.maxY == 900 - 16)
+        #expect(d.maxX == 1440 - 16 && d.minY == 16)  // bottom right, above the Dock
     }
 
     /// Renders the window's content to a PNG so it can be looked at (the harness cannot shoot a panel).
@@ -29,6 +29,7 @@ import Testing
         _ = NSApplication.shared
         let droplet = EavesdroppyDroplet()
         droplet.notesText = "## Agenda\n- Rollout plan\n- Pricing\n\nAction: Priya to send the deck"
+        if ProcessInfo.processInfo.environment["EAVESDROPPY_PANEL_NO_WARNING"] == nil { droplet.demoRecording() }  // after the text: no recording is writing notes.txt
         // The real window (style mask, transparent title bar), so the title bar and traffic lights are in the picture.
         let controller = NotesPanelController(content: { AnyView(NotesPanelView(droplet: droplet)) }, loadFrame: { "" }, saveFrame: { _ in })
         let window = controller.makePanel()

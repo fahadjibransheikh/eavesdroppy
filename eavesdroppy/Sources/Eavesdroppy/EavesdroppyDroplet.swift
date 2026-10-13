@@ -332,6 +332,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private func addWarning(_ w: String) {
         guard session != nil, !warnings.contains(w) else { return }
         warnings.append(w)
+        publishActivity()  // the wing's glyph and its spoken title follow the problem
         if w == noCallAudio { notify("No call audio", symbol: "exclamationmark.triangle.fill", detail: "Allow Droppy in Screen & System Audio Recording.") }
         else { notify("Recording problem", symbol: "exclamationmark.triangle.fill", detail: w) }
     }
@@ -1029,13 +1030,7 @@ extension EavesdroppyDroplet: LiveActivityProviding {
         activitySubject.eraseToAnyPublisher()
     }
 
-    public func makeCompactLeading() -> AnyView {
-        AnyView(
-            Image(systemName: "record.circle.fill")
-                .font(.system(size: DroppyLiveActivityMetrics.iconSize, weight: .medium))
-                .foregroundStyle(Color.red)
-        )
-    }
+    public func makeCompactLeading() -> AnyView { AnyView(RecordingGlyph(droplet: self)) }
 
     public func makeCompactTrailing() -> AnyView { AnyView(ClockLabel(droplet: self)) }
 
@@ -1049,7 +1044,21 @@ extension EavesdroppyDroplet: LiveActivityProviding {
     /// notch being owned by another activity, hence the persistent set.
     private func publishActivity() {
         guard let s = session else { activitySubject.send(nil); return }
-        activitySubject.send(LiveActivityState(priority: 300, accessibilityTitle: "Recording \(s.title)", joinsPersistentActivitySet: true))
+        // One stable state: priority and set membership never change mid-recording, only the spoken title when a problem appears.
+        let problem = callAudioProblem ? ", no call audio" : ""
+        activitySubject.send(LiveActivityState(priority: 300, accessibilityTitle: "Recording \(s.title)\(problem)", joinsPersistentActivitySet: true))
+    }
+}
+
+/// The wing's glyph: the red ring, or an orange triangle while call audio is missing (nothing else in the notch would say so).
+private struct RecordingGlyph: View {
+    @ObservedObject var droplet: EavesdroppyDroplet
+    var body: some View {
+        let problem = droplet.callAudioProblem
+        Image(systemName: problem ? "exclamationmark.triangle.fill" : "record.circle.fill")
+            .font(.system(size: DroppyLiveActivityMetrics.iconSize, weight: .medium))
+            .foregroundStyle(problem ? StateColor.warning : StateColor.destructive)
+            .id(problem).transition(DroppyTransition.compactContent)
     }
 }
 

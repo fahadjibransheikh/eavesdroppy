@@ -31,18 +31,34 @@ struct LibrarySurface: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
             header
-            if let pick = model.teamPick { TeamPicker(pick: pick) }
-            if let link = model.exportLink { ExportLinkRow(model: model, label: link.label, url: link.url) }
-            AskBar(model: model)
-            if let s = model.status {
-                Text(s).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
+            // Find on top, ask at the bottom: the list gets the height, and one field never does two jobs.
+            Group {
+                if model.openID == nil { MeetingList(model: model).transition(DroppyTransition.expandedContent) }
+                else { MeetingDetailView(model: model).transition(DroppyTransition.expandedContent) }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay(alignment: .bottom) { banners }
             AskAnswer(model: model)
-            if model.openID == nil { MeetingList(model: model) } else { MeetingDetailView(model: model) }
+            AskBar(model: model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .environment(\.openURL, OpenURLAction { model.handle($0) ? .handled : .systemAction })
         .onAppear { model.refresh() }
+    }
+
+    /// The team picker, the export link and the status line: one slot over the bottom edge of the list, not in the flow.
+    private var banners: some View {
+        VStack(alignment: .leading, spacing: DroppySpacing.xs) {
+            if let pick = model.teamPick { TeamPicker(pick: pick).transition(DroppyTransition.element) }
+            if let link = model.exportLink { ExportLinkRow(model: model, label: link.label, url: link.url).transition(DroppyTransition.element) }
+            if let s = model.status {
+                Text(s).font(.system(size: 11)).foregroundStyle(model.statusIsError ? StateColor.warning : secondary).lineLimit(2)
+                    .padding(.horizontal, DroppySpacing.smd).padding(.vertical, DroppySpacing.xs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(Color.black))  // the surface's own black, so the list does not show through
+                    .transition(DroppyTransition.element)
+            }
+        }
     }
 
     private var header: some View {
@@ -93,6 +109,7 @@ private struct TeamPicker: View {
             Toggle("Remember as default", isOn: $remember).toggleStyle(.checkbox).font(.system(size: 11)).foregroundStyle(secondary)
         }
         .fieldBox()
+        .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(Color.black))
     }
 }
 
@@ -109,6 +126,8 @@ private struct ExportLinkRow: View {
             Button { model.dismissExportLink() } label: { Image(systemName: "xmark") }
                 .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Dismiss")
         }
+        .padding(.horizontal, DroppySpacing.smd).padding(.vertical, DroppySpacing.xs)
+        .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(Color.black))
     }
 }
 
@@ -222,13 +241,15 @@ private struct AskAnswer: View {
                 ScrollView { MarkdownText(md: a, citations: true) }.frame(maxHeight: 150)
             }
             .rowBox()
+            .transition(DroppyTransition.element)
         case .failed(let why):
             HStack(spacing: DroppySpacing.sm) {
-                Text("Ask failed: \(why)").font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(3)
+                Text("Ask failed: \(why)").font(.system(size: 11)).foregroundStyle(StateColor.warning).lineLimit(3)
                 Spacer(minLength: 0)
                 Button { model.dismissAsk() } label: { Image(systemName: "xmark") }
                     .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Dismiss")
             }
+            .transition(DroppyTransition.element)
         }
     }
 }
@@ -237,6 +258,17 @@ private struct AskAnswer: View {
 
 private struct MeetingList: View {
     @ObservedObject var model: LibraryModel
+
+    /// Sections by day only when browsing; search results stay in relevance order.
+    private var sections: [(title: String?, meetings: [MeetingSummary])] {
+        guard model.query.isEmpty else { return [(nil, model.meetings)] }
+        var out: [(title: String?, meetings: [MeetingSummary])] = []
+        for m in model.meetings {
+            let g = Fmt.group(m.start)
+            if out.last?.title == g { out[out.count - 1].meetings.append(m) } else { out.append((g, [m])) }
+        }
+        return out
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
@@ -251,20 +283,36 @@ private struct MeetingList: View {
             }
             .fieldBox()
             if let e = model.listError {
-                Text("Can't read the library: \(e)").font(.system(size: 11)).foregroundStyle(Color.orange)
+                Text("Can't read the library: \(e)").font(.system(size: 11)).foregroundStyle(StateColor.warning)
             } else if model.meetings.isEmpty {
-                Text(!model.loaded ? "Loading…" : model.query.isEmpty ? "No meetings yet. Record one from the shelf, or import a recording."
-                                                                      : "No meetings match “\(model.query)”.")
-                    .font(.system(size: 12)).foregroundStyle(secondary)
+                empty
             } else {
                 ScrollView {
-                    LazyVStack(spacing: DroppySpacing.xs) {
-                        ForEach(model.meetings) { m in
-                            Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : .notes, turn: m.hitTurnIdx) } label: { MeetingRow(m: m) }
-                                .buttonStyle(.plain)
+                    LazyVStack(alignment: .leading, spacing: DroppySpacing.xs) {
+                        ForEach(sections, id: \.title) { sec in
+                            if let t = sec.title {
+                                Text(t).font(.system(size: 11)).foregroundStyle(tertiary).padding(.top, DroppySpacing.xs).padding(.leading, DroppySpacing.xs)
+                            }
+                            ForEach(sec.meetings) { m in
+                                Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : .notes, turn: m.hitTurnIdx) } label: { MeetingRow(m: m) }
+                                    .buttonStyle(.plain)
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder private var empty: some View {
+        if !model.loaded {
+            Text("Loading…").font(.system(size: 12)).foregroundStyle(secondary)
+        } else if !model.query.isEmpty {
+            Text("No meetings match “\(model.query)”.").font(.system(size: 12)).foregroundStyle(secondary)
+        } else {
+            VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+                Text("No meetings yet. Record one from the shelf, or import a recording.").font(.system(size: 12)).foregroundStyle(secondary)
+                Button("Import recording…") { model.importRecording() }.buttonStyle(DroppyQuietButtonStyle(size: .small))
             }
         }
     }
@@ -279,10 +327,10 @@ private struct MeetingRow: View {
                 Text(m.title).font(.system(size: 13, weight: .medium)).foregroundStyle(primary).lineLimit(1)
                 Spacer(minLength: DroppySpacing.md)
                 if m.openActions > 0 {
-                    Text("\(m.openActions) open").font(.system(size: 11)).monospacedDigit().foregroundStyle(secondary)
+                    Text("\(m.openActions) action\(m.openActions == 1 ? "" : "s")").font(.system(size: 11)).monospacedDigit().foregroundStyle(secondary)
                 }
             }
-            Text("\(Fmt.when(m.start)) · \(Fmt.length(m.duration))\(m.summaryStatus == "failed" ? " · notes failed" : "")")
+            Text("\(Fmt.when(m.start)) · \(m.duration > 0 ? Fmt.length(m.duration) : "No speech detected")\(m.summaryStatus == "failed" ? " · notes failed" : "")")
                 .font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
             if let s = m.snippet { snippet(s, ts: m.hitTS) }
         }
@@ -330,14 +378,14 @@ private struct MeetingDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         } else if let e = model.detailError {
-            Text("Can't read this meeting: \(e)").font(.system(size: 11)).foregroundStyle(Color.orange)
+            Text("Can't read this meeting: \(e)").font(.system(size: 11)).foregroundStyle(StateColor.warning)
         } else {
             ProgressView().controlSize(.small)
         }
     }
 
     private func meta(_ d: MeetingDetail) -> String {
-        ([Fmt.when(d.summary.start), Fmt.length(d.summary.duration)] + (d.attendees.isEmpty ? [] : [d.attendees.joined(separator: ", ")]))
+        ([Fmt.when(d.summary.start)] + (d.summary.duration > 0 ? [Fmt.length(d.summary.duration)] : []) + (d.attendees.isEmpty ? [] : [d.attendees.joined(separator: ", ")]))
             .joined(separator: " · ")
     }
 
@@ -372,10 +420,18 @@ private struct TitleRow: View {
                     .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Rename meeting")
                 Spacer(minLength: 0)
                 if model.busy != nil { ProgressView().controlSize(.small) }
-                Button { model.openInDrive() } label: { Image(systemName: "folder") }
-                    .buttonStyle(DroppyCircleButtonStyle(size: 24)).accessibilityLabel("Open in Drive")
-                Button(model.confirmingDelete ? "Confirm delete" : "Delete") { model.delete() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: model.confirmingDelete))
+                // Two clicks stay (the delete is not undoable): "Delete" in the menu arms it, this button confirms for 4 s.
+                if model.confirmingDelete {
+                    Button("Confirm delete") { model.delete() }
+                        .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: true)).transition(DroppyTransition.element)
+                }
+                Menu {
+                    Button("Show in Finder") { model.openInDrive() }
+                    Button("Copy transcript") { model.copyTranscript() }
+                    Divider()
+                    Button("Delete", role: .destructive) { model.delete() }
+                } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.button).buttonStyle(DroppyCircleButtonStyle(size: 24)).fixedSize().accessibilityLabel("More")
             }
         }
         .droppyFlatGlassControls()
@@ -413,34 +469,56 @@ private struct PlayerControl: View {
 private struct NotesTab: View {
     @ObservedObject var model: LibraryModel
     let d: MeetingDetail
+    @State private var mine = false  // "My notes": what the user typed during the meeting
+
+    private var hasMine: Bool { !d.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-                HStack(spacing: DroppySpacing.sm) {
-                    Text("Template").font(.system(size: 11)).foregroundStyle(tertiary)
-                    Menu {
-                        ForEach(NoteTemplate.all, id: \.id) { t in
-                            Button { model.regenTemplate = t.id } label: {
-                                if model.regenTemplate == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
-                            }
-                        }
-                    } label: { Text(NoteTemplate.name(model.regenTemplate)).font(.system(size: 11, weight: .medium)) }
-                        .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
-                    Button("Regenerate") { model.regenerate() }
-                        .buttonStyle(DroppyQuietButtonStyle(size: .small)).disabled(model.busy != nil)
-                    if let b = model.busy {
-                        ProgressView().controlSize(.small)
-                        Text(b).font(.system(size: 11)).foregroundStyle(secondary)
+                if hasMine {
+                    HStack(spacing: DroppySpacing.xsm) {
+                        choice("Notes", selected: !mine) { mine = false }
+                        choice("My notes", selected: mine) { mine = true }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
+                    .droppyFlatGlassControls()
                 }
-                .droppyFlatGlassControls()
-                if d.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(emptyNotes).font(.system(size: 12)).foregroundStyle(secondary)
-                } else {
-                    MarkdownText(md: d.notes)
+                if mine && hasMine { MarkdownText(md: d.userNotes) } else { generated }
+            }
+        }
+    }
+
+    @ViewBuilder private func choice(_ title: String, selected: Bool, _ action: @escaping () -> Void) -> some View {
+        if selected { Button(title, action: action).buttonStyle(DroppyAccentButtonStyle(size: .small)) }
+        else { Button(title, action: action).buttonStyle(DroppyQuietButtonStyle(size: .small)) }
+    }
+
+    private var generated: some View {
+        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+            HStack(spacing: DroppySpacing.sm) {
+                Text("Template").font(.system(size: 11)).foregroundStyle(tertiary)
+                Menu {
+                    ForEach(NoteTemplate.all, id: \.id) { t in
+                        Button { model.regenTemplate = t.id } label: {
+                            if model.regenTemplate == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
+                        }
+                    }
+                } label: { Text(NoteTemplate.name(model.regenTemplate)).font(.system(size: 11, weight: .medium)) }
+                    .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
+                Button("Regenerate") { model.regenerate() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small)).disabled(model.busy != nil)
+                if let b = model.busy {
+                    ProgressView().controlSize(.small)
+                    Text(b).font(.system(size: 11)).foregroundStyle(secondary)
                 }
+                Spacer(minLength: 0)
+            }
+            .droppyFlatGlassControls()
+            if d.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(emptyNotes).font(.system(size: 12)).foregroundStyle(secondary)
+            } else {
+                MarkdownText(md: d.notes)
             }
         }
     }
@@ -475,6 +553,8 @@ private struct TranscriptTab: View {
     @ObservedObject var model: LibraryModel
     let d: MeetingDetail
 
+    private func isMe(_ g: TranscriptGroup) -> Bool { d.speakers.first { $0.id == g.turns.first?.speakerID }?.kind == "me" }
+
     var body: some View {
         if d.turns.isEmpty {
             Text("No speech detected.").font(.system(size: 12)).foregroundStyle(secondary)
@@ -484,7 +564,8 @@ private struct TranscriptTab: View {
                     LazyVStack(alignment: .leading, spacing: DroppySpacing.md) {
                         ForEach(TranscriptGroup.group(d.turns)) { g in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(g.speaker).font(.system(size: 11, weight: .semibold)).foregroundStyle(secondary)
+                                Text(g.speaker).font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(isMe(g) ? accent : secondary)
                                 ForEach(g.turns) { t in
                                     Button { model.seek(safeInt(t.start)) } label: {
                                         HStack(alignment: .firstTextBaseline, spacing: DroppySpacing.sm) {
@@ -537,6 +618,7 @@ private struct SpeakersTab: View {
     }
 
     @ViewBuilder private func row(_ s: SpeakerRow) -> some View {
+        let suggestion = editing == s.id ? nil : model.suggestedPerson(for: s)  // a voiceprint match that was not sure enough to apply
         VStack(alignment: .leading, spacing: DroppySpacing.xsm) {
             HStack(spacing: DroppySpacing.sm) {
                 if editing == s.id {
@@ -545,28 +627,21 @@ private struct SpeakersTab: View {
                     Button("Save") { save(s) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                     Button("Cancel") { editing = nil }.buttonStyle(DroppyQuietButtonStyle(size: .small))
                 } else {
+                    playButton(s)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(s.label).font(.system(size: 13, weight: .medium)).foregroundStyle(primary).lineLimit(1)
-                        Text(stats(s)).font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
+                        Text(suggestion.map { "Is this \(model.displayName($0))?" } ?? s.label)
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(primary).lineLimit(1)
+                        Text(suggestion == nil ? stats(s) : "\(s.label) · \(stats(s))").font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    if !model.people.isEmpty {
-                        Menu {
-                            ForEach(model.people) { p in Button(model.displayName(p)) { model.assignSpeaker(s, to: p) } }
-                        } label: { Text("This is…").font(.system(size: 11, weight: .medium)) }
-                            .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
-                            .accessibilityLabel("This speaker is a known person")
+                    if let p = suggestion {  // the best action is the row's headline
+                        Button("Yes") { model.assignSpeaker(s, to: p) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
+                        Button("Someone else") { startNaming(s, scope: .newPerson) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+                    } else if s.kind == "me" {
+                        Button("Rename") { startNaming(s, scope: .plain) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+                    } else {
+                        nameMenu(s)
                     }
-                    Button("Rename") { draft = s.label; scope = s.personID == nil ? .newPerson : .plain; editing = s.id; model.requestKeyboard() }
-                        .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                }
-            }
-            if editing != s.id, let p = model.suggestedPerson(for: s) {  // a voiceprint match that was not sure enough to apply
-                HStack(spacing: DroppySpacing.sm) {
-                    Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 11)).foregroundStyle(accent)
-                    Text("Is this \(model.displayName(p))?").font(.system(size: 12)).foregroundStyle(primary).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Button("Yes, it is") { model.assignSpeaker(s, to: p) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                 }
             }
             if editing == s.id {
@@ -580,6 +655,32 @@ private struct SpeakersTab: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .rowBox()
+    }
+
+    /// Plays from the speaker's first turn: hear the voice, then name it.
+    @ViewBuilder private func playButton(_ s: SpeakerRow) -> some View {
+        let first = d.turns.first { $0.speakerID == s.id }
+        Button { if let t = first { model.seek(safeInt(t.start)) } } label: { Image(systemName: "play.fill") }
+            .buttonStyle(DroppyCircleButtonStyle(size: 20))
+            .disabled(first == nil || d.summary.audioPath == nil)
+            .accessibilityLabel("Play \(s.label)")
+    }
+
+    /// People first, then a new person, then this meeting only. Replaces the "This is…" menu and the Rename button.
+    private func nameMenu(_ s: SpeakerRow) -> some View {
+        Menu {
+            ForEach(model.people) { p in Button(model.displayName(p)) { model.assignSpeaker(s, to: p) } }
+            if !model.people.isEmpty { Divider() }
+            Button("New person…") { startNaming(s, scope: .newPerson) }
+            Button("This meeting only…") { startNaming(s, scope: .plain) }
+        } label: { Text(s.personID == nil ? "Name" : "Rename").font(.system(size: 11, weight: .medium)) }
+            .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
+            .accessibilityLabel("Name this speaker")
+    }
+
+    private func startNaming(_ s: SpeakerRow, scope: RenameScope) {
+        draft = s.personID == nil && s.label.hasPrefix("Speaker") ? "" : s.label
+        self.scope = scope; editing = s.id; model.requestKeyboard()
     }
 
     private func options(_ s: SpeakerRow) -> [(RenameScope, String)] {

@@ -78,3 +78,20 @@ import Testing
         #expect(Fmt.when("not a date") == "not a date")
     }
 }
+
+@Suite struct LibraryListTests {
+    @Test func groupsByDay() {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = Fmt.parseISO("2026-10-13T12:00:00Z")!
+        #expect(Fmt.group("2026-10-13T01:00:00Z", now: now, calendar: cal) == "Today")
+        #expect(Fmt.group("2026-10-12T23:59:00Z", now: now, calendar: cal) == "Yesterday")
+        #expect(Fmt.group("2026-10-08T12:00:00Z", now: now, calendar: cal) == "This week")
+        #expect(Fmt.group("2026-10-06T12:00:00Z", now: now, calendar: cal) == "Earlier")
+        #expect(Fmt.group("garbage", now: now, calendar: cal) == "Earlier")
+    }
+
+    @Test func transcriptTextIsOneLinePerTurn() {
+        let t = [TurnRow(idx: 0, speakerID: 1, speaker: "Me", start: 0, end: 5, text: "Hi"), TurnRow(idx: 1, speakerID: 2, speaker: "Priya", start: 3725, end: 3730, text: "Hello")]
+        #expect(LibraryModel.transcriptText(t) == "Me [00:00]: Hi\nPriya [1:02:05]: Hello")
+    }
+}

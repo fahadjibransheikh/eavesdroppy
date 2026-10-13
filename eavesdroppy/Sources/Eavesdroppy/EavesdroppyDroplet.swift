@@ -155,6 +155,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         library.requestKeyboard = { [weak self] in self?.focusTitle() }
         library.reveal = { [weak self] url in self?.host?.workspace.revealInFinder(url) }
         library.openURL = { [weak self] url in _ = self?.host?.workspace.open(url) }
+        library.copyText = { [weak self] in self?.host?.workspace.copyToPasteboard($0) ?? false }
+        library.importRecording = { [weak self] in self?.chooseImport() }
         library.refresh()
         scheduleExpiry()
         scheduleOldDropletNotice(droplets: droplets)
@@ -434,7 +436,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         func count(_ v: Any?) -> Int { (v as? Int) ?? (v as? [Any])?.count ?? 0 }
         library.command(["import-drive"], serial: false, busy: "Importing…", failure: "Import failed") { [weak library] r in
             if case .success(let j) = r {
-                library?.flash("Imported \(count(j["imported"])), skipped \(count(j["skipped"])), failed \(count(j["failed"]))")
+                library?.flash("Imported \(count(j["imported"])), skipped \(count(j["skipped"])), failed \(count(j["failed"]))", isError: false)
             }
         }
     }

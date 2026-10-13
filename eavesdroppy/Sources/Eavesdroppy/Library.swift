@@ -100,6 +100,15 @@ enum Fmt {
         }
         return "\(day), \(time)"
     }
+    /// The list's section: "Today", "Yesterday", "This week" (the last six days) or "Earlier".
+    static func group(_ s: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let d = parseISO(s) else { return "Earlier" }
+        if calendar.isDate(d, inSameDayAs: now) { return "Today" }
+        if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(d, inSameDayAs: y) { return "Yesterday" }
+        if let w = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)), d >= w { return "This week" }
+        return "Earlier"
+    }
+
     /// "1h 05m" / "25m" / "—"
     static func length(_ sec: Double) -> String {
         let m = safeInt((sec / 60).rounded())

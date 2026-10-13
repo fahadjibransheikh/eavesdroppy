@@ -197,7 +197,17 @@ extension EavesdroppyDroplet {
             case "teampicker":
                 library.teamPick = TeamPick(teams: [LinearTeam(id: "1", name: "Engineering", key: "ENG"), LinearTeam(id: "2", name: "Growth", key: "GRO"),
                                                     LinearTeam(id: "3", name: "Support", key: "SUP")]) { _, _ in }
-            case "speakers", "askperson":
+            case "meetings", "empty":
+                let now = Date()
+                func m(_ i: Int, _ t: String, _ ago: TimeInterval, _ dur: Double, _ open: Int) -> MeetingSummary {
+                    MeetingSummary(id: i, title: t, start: ISO8601DateFormatter().string(from: now.addingTimeInterval(-ago)), duration: dur, source: "record",
+                                   template: "general", summaryStatus: "ok", folder: nil, audioPath: nil, openActions: open)
+                }
+                library.demoList(what == "empty" ? [] : [m(1, "Weekly sync", 3600, 3900, 2), m(2, "1:1 with Priya", 86_400 + 3600, 1500, 0), m(3, "Roadmap planning", 3 * 86_400, 2700, 1),
+                                                         m(4, "Quarterly review", 20 * 86_400, 3300, 3), m(5, "Empty import", 25 * 86_400, 0, 0)],
+                                 status: what == "empty" ? nil : ("Imported 3, skipped 0, failed 0", false))
+                openLibrary()
+            case "speakers", "askperson", "mynotes":
                 let people = [PersonRow(id: 1, name: "Me", isMe: true), PersonRow(id: 2, name: "Priya Nair", isMe: false), PersonRow(id: 3, name: "Sam Lee", isMe: false)]
                 let summary = MeetingSummary(id: 1, title: "Weekly sync", start: "2026-10-12T10:00:00+05:00", duration: 1860, source: "record", template: "general",
                                              summaryStatus: "ok", folder: nil, audioPath: nil, openActions: 1)
@@ -206,7 +216,7 @@ extension EavesdroppyDroplet {
                                 SpeakerRow(id: 3, track: "system", label: "Speaker 3", personID: nil, kind: "new")]
                 let turns = (0..<6).map { TurnRow(idx: $0, speakerID: $0 % 3 + 1, speaker: speakers[$0 % 3].label, start: Double($0) * 40, end: Double($0) * 40 + 35, text: "Turn \($0)") }
                 let detail = MeetingDetail(summary: summary, attendees: ["Priya Nair", "Sam Lee"], notes: "## Summary\n- Shipped the beta [00:40]\n- Priya owns the rollout plan",
-                                           userNotes: "", speakers: speakers, turns: turns, actions: [])
+                                           userNotes: what == "mynotes" ? "- Ask Priya about pricing\n- Rollout date: 3 Nov" : "", speakers: speakers, turns: turns, actions: [])
                 library.demo(detail: detail, people: people, tab: what == "speakers" ? .speakers : .notes, askPerson: what == "askperson" ? people[1] : nil)
                 openLibrary()
             case "olddroplet": notify("Remove the old Meetings droplet", symbol: "exclamationmark.triangle.fill",

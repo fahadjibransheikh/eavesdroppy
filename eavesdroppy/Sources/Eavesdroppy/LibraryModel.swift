@@ -19,6 +19,9 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     var requestKeyboard: () -> Void = {}
     var reveal: (URL) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
+    var copyText: (String) -> Bool = { _ in false }
+    /// The empty state's "Import recording…" (the droplet's open panel).
+    var importRecording: () -> Void = {}
     /// The "Your name" setting; passed to the pipeline as --user-name (empty = let the pipeline use its default).
     var userName: @MainActor () -> String = { "" }
 
@@ -34,6 +37,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     @Published var tab: DetailTab = .notes
     @Published var focusTurn: Int?
     @Published var status: String?
+    /// A problem is orange; information (an import count, "copied") is not.
+    @Published private(set) var statusIsError = true
     @Published private(set) var busy: String?
     @Published var regenTemplate = "general"
     @Published var confirmingDelete = false
@@ -87,7 +92,7 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
         let gen = listGen, q = query
         reader.read(empty: [MeetingSummary](), { try $0.listMeetings(query: q) }) { [weak self] r in
             MainActor.assumeIsolated {
-                guard let self, gen == self.listGen else { return }
+                guard let self, gen == self.listGen, !self.demoMode else { return }  // demo: a read queued before it must not overwrite it
                 self.loaded = true
                 switch r {
                 case .success(let m):
@@ -133,7 +138,7 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
                     if self.detail == nil { self.regenTemplate = d.summary.template }
                     self.detail = d; self.detailError = nil
                     if let s = self.pendingSeek { self.pendingSeek = nil; self.seek(s) }
-                case .success(nil): self.back(); self.flash("That meeting no longer exists")  // deleted elsewhere
+                case .success(nil): self.back(); self.flash("That meeting no longer exists", isError: false)  // deleted elsewhere
                 case .failure(let e): self.detailError = "\(e)"
                 }
             }
@@ -158,6 +163,12 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     func demo(detail d: MeetingDetail, people p: [PersonRow], tab t: DetailTab, askPerson a: PersonRow? = nil) {
         demoMode = true
         meetings = [d.summary]; recents = meetings; loaded = true; openID = d.summary.id; detail = d; people = p; tab = t; askPerson = a
+    }
+
+    /// Harness only: a list on screen (no meetings = the empty state), with an optional status line.
+    func demoList(_ m: [MeetingSummary], status s: (String, Bool)? = nil) {
+        demoMode = true; meetings = m; recents = Array(m.prefix(3)); loaded = true
+        if let s { flash(s.0, isError: s.1) }
     }
 
     /// Harness only: Recent rows for the widget's shot.
@@ -199,8 +210,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
 
     // MARK: commands
 
-    func flash(_ text: String) {
-        status = text
+    func flash(_ text: String, isError: Bool = true) {
+        status = text; statusIsError = isError
         statusWork?.cancel()
         let w = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.status = nil } }
         statusWork = w
@@ -275,7 +286,7 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
 
     func export(_ a: ActionRow, to target: ExportTarget) {
         if target == .linear, a.exportedTo == ExportTarget.linear.rawValue {  // already there: show it, never create a second issue
-            if let url = linearURL(for: a) { openURL(url) } else { flash("This item is already in Linear") }
+            if let url = linearURL(for: a) { openURL(url) } else { flash("This item is already in Linear", isError: false) }
             return
         }
         guard let d = detail, exporting.insert(a.id).inserted else { return }
@@ -289,7 +300,7 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
             case .success(let out):
                 self.command(["set-action-exported", String(a.id), target.rawValue, out.externalID], failure: "Couldn't record the export") { r in
                     guard case .success = r else { return }
-                    self.flash("Added to \(target.title)")
+                    self.flash("Added to \(target.title)", isError: false)
                     if let url = out.url { self.exportLink = (out.label ?? "Open in \(target.title)", url) }
                 }
             }
@@ -323,6 +334,16 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
         command(["delete", String(id)], failure: "Couldn't delete") { [weak self] r in
             if case .success = r { self?.back() }
         }
+    }
+
+    /// "Speaker  03:41\ntext" per turn, in order; what "Copy transcript" puts on the pasteboard.
+    nonisolated static func transcriptText(_ turns: [TurnRow]) -> String {
+        turns.map { "\($0.speaker) [\(Timestamp.format($0.start))]: \($0.text)" }.joined(separator: "\n")
+    }
+
+    func copyTranscript() {
+        guard let d = detail, !d.turns.isEmpty else { flash("There is no transcript to copy"); return }
+        if copyText(Self.transcriptText(d.turns)) { flash("Transcript copied", isError: false) } else { flash("Couldn't copy to the clipboard") }
     }
 
     func openInDrive() {

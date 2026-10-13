@@ -30,8 +30,11 @@ LOCALVQE_TIMEOUT = 900  # seconds per call
 BLEED_THR = 0.02  # mean coherence 300-3400 Hz; unrelated speech <= 0.010, bleed >= 0.018 (synthetic sweep)
 BLEED_SHARE = 1 / 3  # flag when at least this share of scored windows reach BLEED_THR
 TARGET_LAG_MS = 60  # LocalVQE copes with an echo lag from ~40 ms up; a lead beyond ~20 ms breaks it
-MIN_REDUCTION_DB = 3.0  # self-check: echo-dominant frames must get at least this much quieter
+MIN_REDUCTION_DB = 3.0  # self-check: the echo-to-rest ratio in echo windows must fall by at least this much
 MAX_NEAR_LOSS_DB = 3.0  # ...and system-silent frames (near end alone) must not lose more than this
+NULL_COH = 0.003  # coherence of unrelated signals over a 10 s window; floors the "after" score so it cannot be 0
+CHUNK_GOOD_DB = 6.0  # a chunk whose echo windows fell by less than this is retried at the other reference lags
+RETRY_LAGS_MS = (160, 240, 100, 400)  # LocalVQE sometimes passes a chunk through untouched (see _clean_chunk)
 CHUNK_S, OVERLAP_S = 30, 2  # per-chunk lag estimate + alignment: 500 ppm drift gives ERLE 3 dB whole-file, 17 dB at 30 s
 
 
@@ -112,11 +115,15 @@ def estimate_lag_ms(mic, sysm, lo_ms=-500, hi_ms=800, seg_s=60):
     return round((int(np.argmax(c[: hi - lo + 1])) + lo) / 16)
 
 
-def shift_reference(ref, lag_ms, n):
+def shift_reference(ref, lag_ms, n, target_ms=None):
     """Reference cropped/padded to n samples. If the mic echo leads or barely trails it (lag < 40 ms) the reference
-    is advanced (leading samples dropped) so the echo lag becomes ~TARGET_LAG_MS; otherwise it is left alone."""
-    adv = int(SR * max(0, TARGET_LAG_MS - lag_ms) / 1000) if lag_ms < 40 else 0
-    r = ref[adv:]
+    is advanced (leading samples dropped) so the echo lag becomes ~TARGET_LAG_MS; otherwise it is left alone.
+    target_ms: always move the echo lag to this value instead (advance, or delay with leading zeros)."""
+    if target_ms is not None:
+        adv = int(SR * (target_ms - lag_ms) / 1000)
+    else:
+        adv = int(SR * max(0, TARGET_LAG_MS - lag_ms) / 1000) if lag_ms < 40 else 0
+    r = ref[adv:] if adv >= 0 else np.concatenate([np.zeros(-adv, np.float32), ref])
     return np.pad(r, (0, max(0, n - len(r))))[:n].astype(np.float32)
 
 
@@ -176,9 +183,52 @@ def _chunks(n, chunk, overlap):
     return list(zip(cuts[:-1], cuts[1:]))
 
 
+def _reduction(mic_scores, out_scores):
+    """Echo-to-rest ratio before/after, dB, over the windows where the mic is coherent with the reference (echo
+    present: score >= BLEED_THR). Coherence g = E / (E + rest), so g / (1 - g) = E / rest; the ratio of the summed
+    values is how much the echo fell relative to everything else, which near-end speech cannot fake. None = no echo
+    window, so there is nothing to measure."""
+    before = after = 0.0
+    n = 0
+    for a, b in zip(mic_scores, out_scores):
+        if a["score"] is None or a["score"] < BLEED_THR or b["score"] is None:
+            continue
+        g, h = min(a["score"], 0.999), min(max(b["score"] if b["score"] == b["score"] else 0.0, NULL_COH), 0.999)
+        before += g / (1 - g)
+        after += h / (1 - h)
+        n += 1
+    return round(float(10 * np.log10(before / after)), 1) if n else None
+
+
+def echo_reduction_db(mic, out, ref):
+    """_reduction over whole tracks. ref must be on the mic's clock with a non-negative echo lag (see shift_reference)."""
+    return _reduction(window_scores_coh(mic, ref), window_scores_coh(out, ref))
+
+
+def _clean_chunk(m, s, lag):
+    """-> cleaned chunk, or None when the mic shows no echo to remove. The standalone LocalVQE sometimes returns a
+    clip untouched (measured: 0.3 dB instead of 11-19 dB on a 34 s clip with a 260 ms echo; it flips with the echo lag
+    and the clip bounds, deterministically). That is visible as an unchanged echo window, so the chunk is retried with
+    the echo lag moved to RETRY_LAGS_MS and the best result kept. Chunks without coherent echo (a silent or sparse
+    system track: pings, clicks) are not run at all: LocalVQE adds energy there instead of removing any."""
+    ref = shift_reference(s, lag, len(m))
+    mic_scores = window_scores_coh(m, ref)
+    if not any(w["score"] is not None and w["score"] >= BLEED_THR for w in mic_scores):
+        return None
+    best, best_db = None, None
+    for target in (None, *RETRY_LAGS_MS):
+        y = _localvqe(m, ref if target is None else shift_reference(s, lag, len(m), target))
+        db_ = _reduction(mic_scores, window_scores_coh(y, ref)) or 0.0
+        if best is None or db_ > best_db:
+            best, best_db = y, db_
+        if best_db >= CHUNK_GOOD_DB:
+            break
+    return best
+
+
 def process(mic, system, chunk_s=CHUNK_S, overlap_s=OVERLAP_S):
     """Arrays -> (cleaned, info). Each chunk gets its own lag estimate and reference alignment; chunk cores are
-    joined with a short crossfade taken from the overlap context."""
+    joined with a short crossfade taken from the overlap context. Chunks with no echo pass through unchanged (lag None)."""
     n = len(mic)
     system = np.pad(system, (0, max(0, n - len(system))))[:n]
     chunk, ov, xf = int(chunk_s * SR), int(overlap_s * SR), int(0.05 * SR)
@@ -187,13 +237,11 @@ def process(mic, system, chunk_s=CHUNK_S, overlap_s=OVERLAP_S):
     for a, b in _chunks(n, chunk, ov):
         lo, hi = max(0, a - ov), min(n, b + ov)
         m, s = mic[lo:hi], system[lo:hi]
-        if (np.abs(s) > 1e-4).mean() < 0.01:  # reference silent: nothing to cancel
+        lag = estimate_lag_ms(m, s, seg_s=chunk_s) if len(m) > 10 * SR else glag
+        y = _clean_chunk(m, s, lag)
+        lags.append(None if y is None else lag)
+        if y is None:
             y = m
-            lags.append(None)
-        else:
-            lag = estimate_lag_ms(m, s, seg_s=chunk_s) if len(m) > 10 * SR else glag
-            lags.append(lag)
-            y = _localvqe(m, shift_reference(s, lag, len(m)))
         t = np.arange(lo, hi)  # absolute sample index; weight is 1 in the core, ramps over xf at interior edges
         w = np.ones(len(m), np.float32)
         if a > 0:
@@ -206,10 +254,13 @@ def process(mic, system, chunk_s=CHUNK_S, overlap_s=OVERLAP_S):
     return out, {"chunk_lags_ms": lags, "global_lag_ms": glag}
 
 
-def self_check(mic, out, system):
-    """Truth-free check. Echo-dominant frames = system active and mic in the quieter half of those frames
-    (near speech on top of the echo is louder than echo alone); they must get >= MIN_REDUCTION_DB quieter.
-    System-silent frames (near end alone) must keep their energy within MAX_NEAR_LOSS_DB."""
+def self_check(mic, out, system, lag_ms=0):
+    """Truth-free check. reduction_echo_dB: in the 10 s windows where the mic is coherent with the system track (echo
+    present), the echo-to-rest ratio must fall by >= MIN_REDUCTION_DB (see _reduction; None = no echo window to judge).
+    Energy is the wrong yardstick here: echo-dominant frames picked by mic level are the ones where the echo is weakest,
+    and the energy of a laptop-speaker recording sits below 300 Hz where LocalVQE does nothing (measured: 1.3 dB energy
+    reduction on a recording whose coherence fell from 0.8-0.95 to 0.01). System-silent frames (near end alone) must keep
+    their energy within MAX_NEAR_LOSS_DB. lag_ms: echo lag; a negative one means the reference is advanced first."""
     n = min(len(mic), len(out), len(system))
     mic, out, system = mic[:n], out[:n], system[:n]
     sa = active(system, -45)
@@ -217,10 +268,7 @@ def self_check(mic, out, system):
     k = min(len(sa), len(mf))
     sa, mf, of = sa[:k], mf[:k], of[:k]
     r = {"reduction_echo_dB": None, "near_change_dB": None, "ok": False}
-    if sa.sum() >= 20:
-        rms = np.sqrt((mf ** 2).mean(1))
-        ech = sa & (rms <= np.median(rms[sa]))
-        r["reduction_echo_dB"] = round(db(mf[ech].ravel(), of[ech].ravel()), 1)
+    r["reduction_echo_dB"] = echo_reduction_db(mic, out, shift_reference(system, lag_ms, n) if lag_ms < 0 else system)
     quiet = ~binary_dilation(sa, iterations=15)
     if quiet.sum() >= 20 and (mf[quiet] ** 2).sum() > 1e-9:
         r["near_change_dB"] = round(db(of[quiet].ravel(), mf[quiet].ravel()), 1)  # negative = near end got quieter
@@ -250,7 +298,7 @@ def remove_echo(mic_path, system_path, out_path, chunk_s=CHUNK_S, system_offset_
         sf.write(out_path, mic, SR, subtype="FLOAT")
         return {**info, "failed": True, "reason": str(e)[:300], "seconds": round(time.time() - t0, 1)}
     sf.write(out_path, out, SR, subtype="FLOAT")
-    chk = self_check(mic, out, system)
+    chk = self_check(mic, out, system, pi["global_lag_ms"])
     info.update(self_check=chk, lag_ms=pi["global_lag_ms"], chunk_lags_ms=pi["chunk_lags_ms"])
     if not chk["ok"]:
         info.update(failed=True, reason="self-check: " + (

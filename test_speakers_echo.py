@@ -181,6 +181,56 @@ assert m["ERLE_far_only_dB"] >= 12 and m["near_only_SISDR_out_dB"] >= 20, m
 assert echo._chunks(100, 30, 0) == [(0, 30), (30, 60), (60, 100)]  # short tail merges into the last chunk
 assert echo._chunks(60, 30, 0) == [(0, 30), (30, 60)] and echo._chunks(10, 30, 0) == [(0, 10)]
 
+# self-check yardstick: echo-to-rest ratio over echo windows (_reduction), from window scores
+sc = lambda *v: [{"score": x} for x in v]
+assert echo._reduction(sc(0.5, None, 0.01), sc(0.0, None, 0.0)) == echo._reduction(sc(0.5), sc(0.0))  # 0.01 < BLEED_THR: not an echo window
+assert echo._reduction(sc(0.01, None), sc(0.0, 0.0)) is None  # no echo window: nothing to judge
+assert echo._reduction(sc(0.5), sc(0.5)) == 0.0 and echo._reduction(sc(0.5), sc(0.0)) == round(10 * np.log10(1 / (0.003 / 0.997)), 1)
+assert abs(echo._reduction(sc(0.9, 0.5), sc(0.01, 0.5)) - 10 * np.log10(10 / (0.01 / 0.99 + 1))) < 0.06  # sums E/rest, not dB means
+assert echo._reduction(sc(0.5), sc(float("nan"))) == echo._reduction(sc(0.5), sc(0.0))
+# shift_reference with a target lag: advance, delay (zeros in front), same length
+ramp = np.arange(1, 4001, dtype=np.float32)
+assert list(echo.shift_reference(ramp, 50, 4000, target_ms=60)[:2]) == [161, 162]
+d_ = echo.shift_reference(ramp, 250, 4000, target_ms=160)
+assert np.all(d_[:1440] == 0) and d_[1440] == 1 and len(d_) == 4000
+assert np.array_equal(echo.shift_reference(ramp, 250, 4000), ramp)  # default behaviour unchanged
+
+# self-check on the bleed fixture: removed -> passes; passed through untouched -> fails
+lag = echo.estimate_lag_ms(mic, sysm)
+chk = echo.self_check(mic, out, sysm, lag)
+assert chk["ok"] and chk["reduction_echo_dB"] >= 12, chk
+chk = echo.self_check(mic, mic, sysm, lag)
+assert not chk["ok"] and abs(chk["reduction_echo_dB"]) < 0.5, chk
+
+# LocalVQE is only run where the mic is coherent with the system track: a sparse system track (pings) is left alone
+real_lv = echo._localvqe
+def boom(*a, **k): raise AssertionError("LocalVQE ran on a chunk without echo")
+echo._localvqe = boom
+try:
+    rng_ = np.random.default_rng(5)
+    m_ = (0.05 * rng_.standard_normal(40 * SR)).astype(np.float32)
+    s_ = np.zeros(40 * SR, np.float32)
+    for t_ in (3, 11, 25, 33):
+        s_[t_ * SR: t_ * SR + 3200] = 0.5 * rng_.standard_normal(3200)
+    out_, pi_ = echo.process(m_, s_)
+    assert np.array_equal(out_, m_) and pi_["chunk_lags_ms"] == [None], pi_
+finally:
+    echo._localvqe = real_lv
+
+# LocalVQE returns some clips untouched (deterministically, depending on the echo lag): the chunk is retried at
+# other lags and the cancelled result wins. The stand-in below passes the natural alignment through.
+calls = []
+def flaky(m, ref):
+    calls.append(len(calls))
+    return m if len(calls) == 1 else real_lv(m, ref)
+echo._localvqe = flaky
+try:
+    out_, pi_ = echo.process(mic[: 25 * SR], sysm[: 25 * SR])
+finally:
+    echo._localvqe = real_lv
+assert len(calls) >= 2, calls
+assert echo.echo_reduction_db(mic[: 25 * SR], out_, sysm[: 25 * SR]) >= echo.CHUNK_GOOD_DB
+
 # dedup_words: marks, never silently deletes; short common words only go next to other echoed words
 mic_w = [W("Thanks", 10.0, 10.3), W("everyone", 10.3, 10.8), W("for", 10.8, 10.9), W("joining", 10.9, 11.3),
          W("yes", 20.0, 20.2), W("the", 25.0, 25.1), W("budget", 25.1, 25.5), W("is", 40.0, 40.1), W("fine", 40.1, 40.4)]

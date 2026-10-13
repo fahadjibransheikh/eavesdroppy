@@ -1,19 +1,19 @@
 import DroppyKit
 import SwiftUI
 
-// MARK: - Expanded surface: the meeting library (and typed notes when they are set to live in the notch)
+// MARK: - Expanded surface: the meeting library
 
 extension EavesdroppyDroplet: ExpandedSurfaceProviding {
     public var expandedSurfaces: [ExpandedSurfaceDescriptor] {
-        // The user reads and types here with the pointer elsewhere, so the shelf must not auto-collapse. Clicking
-        // outside still closes it: typed notes are saved live, and browsing loses nothing.
+        // The user reads and types here (Ask, renames) with the pointer elsewhere, so the shelf must not auto-collapse.
+        // Clicking outside still closes it, and browsing loses nothing.
         [ExpandedSurfaceDescriptor(id: Self.surfaceID, title: "Meetings", systemImage: "waveform",
                                    suppresses: [.shelfWidgets, .autoCollapse])]
     }
 
     public func makeExpandedSurfaceView(_ id: ExpandedSurfaceID, context: ExpandedSurfaceContext) -> AnyView {
         guard id == Self.surfaceID else { return AnyView(EmptyView()) }
-        return AnyView(LibrarySurface(droplet: self, model: library))
+        return AnyView(LibrarySurface(model: library))
     }
 
     public func expandedSurfaceSize(_ id: ExpandedSurfaceID, fitting proposal: ExpandedSurfaceSizeProposal) -> CGSize? {
@@ -27,6 +27,5 @@ extension EavesdroppyDroplet: ExpandedSurfaceProviding {
         if let live = host?.notchSurface.expandedState.current, live != dismissed, live.surfaceID == id { return }
         if presentation == dismissed { presentation = nil }
         library.surfaceClosed()
-        if notesFocused { notesFocusChanged(false) }
     }
 }

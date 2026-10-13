@@ -35,7 +35,6 @@ extension EavesdroppyDroplet: SettingsPagesProviding {
          SettingsSearchEntry(title: "Offer to record when a call starts", keywords: ["microphone", "prompt", "zoom", "teams", "meet"]),
          SettingsSearchEntry(title: "Read participant names", keywords: ["accessibility", "zoom", "teams", "meet", "speakers"]),
          SettingsSearchEntry(title: "Teach Eavesdroppy your voice", keywords: ["voiceprint", "enroll", "speakers"]),
-         SettingsSearchEntry(title: "Notes location", keywords: ["typed notes", "widget", "notch"]),
          SettingsSearchEntry(title: "Default template", keywords: ["notes", "standup", "sales", "interview"]),
          SettingsSearchEntry(title: "AI provider", keywords: ["claude", "codex", "grok", "apple intelligence", "api key", "openai", "anthropic", "xai", "model"]),
          SettingsSearchEntry(title: "AI tools (MCP)", keywords: ["mcp", "claude code", "cursor", "server", "token", "localhost"]),
@@ -65,7 +64,7 @@ private struct SettingsRoot: View {
             DropletSettingsCard {
                 link("Recording", "Echo removal, consent reminder, auto-stop", PageID.recording, "mic.fill", .red)
                 link("Speakers", "Your voice and automatic naming", PageID.speakers, "person.wave.2.fill", .blue)
-                link("Notes", "Where you type, and the default template", PageID.notes, "note.text", .orange)
+                link("Notes", "The default template and AI provider", PageID.notes, "note.text", .orange)
                 link("Calendar", "Prompts before events", PageID.calendar, "calendar", .pink)
                 link("Output", "Reminders and Linear", PageID.output, "checklist", .green)
                 link("Storage", "Audio retention, import, folders", PageID.storage, "externaldrive.fill", .gray)
@@ -207,13 +206,6 @@ private struct NotesPage: View {
     var body: some View {
         DropletSettingsPage {
             DropletSettingsCard {
-                DropletGroupedPickerRow(title: "Typed notes live in", subtitle: "Where the notes field appears while you record.") {
-                    Picker("", selection: prefs.binding(Prefs.Key.notesLocation, "widget")) {
-                        Text("Shelf widget").tag("widget")
-                        Text("Notch").tag("notch")
-                    }
-                    .labelsHidden().pickerStyle(.menu)
-                }
                 DropletGroupedPickerRow(title: "Default template", subtitle: "How notes are written. You can switch per meeting and regenerate later.") {
                     Picker("", selection: prefs.binding(Prefs.Key.defaultTemplate, "general")) {
                         ForEach(NoteTemplate.all, id: \.id) { Text($0.name).tag($0.id) }

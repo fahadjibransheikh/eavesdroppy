@@ -2,7 +2,7 @@ import DroppyKit
 import SwiftUI
 
 /// Typed notes during a meeting (D9). The text is saved live by the droplet (debounced, atomic) to
-/// `<session>/notes.txt`; this view is the same in the shelf widget and the expanded surface.
+/// `<session>/notes.txt`; this view is the body of the floating notes window (NotesPanel.swift).
 struct TypedNotes: View {
     @ObservedObject var droplet: EavesdroppyDroplet
 
@@ -11,11 +11,8 @@ struct TypedNotes: View {
             text: $droplet.notesText,
             context: DroppyMarkdownEditorContext(
                 documentID: droplet.session?.dir.path,
-                placeholder: "Type notes while you talk…",
-                onFocusChange: { droplet.notesFocusChanged($0) }))
+                placeholder: "Type notes while you talk…"))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The shelf takes key focus only when asked, as for the title field.
-            .simultaneousGesture(TapGesture().onEnded { droplet.focusTitle() })
     }
 }
 

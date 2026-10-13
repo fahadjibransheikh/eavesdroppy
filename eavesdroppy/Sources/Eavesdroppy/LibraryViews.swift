@@ -26,26 +26,19 @@ private extension View {
 }
 
 struct LibrarySurface: View {
-    @ObservedObject var droplet: EavesdroppyDroplet
     @ObservedObject var model: LibraryModel
-
-    private var notesShown: Bool { droplet.notesInNotch && !model.browsing }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
             header
             if let pick = model.teamPick { TeamPicker(pick: pick) }
             if let link = model.exportLink { ExportLinkRow(model: model, label: link.label, url: link.url) }
-            if notesShown {
-                TypedNotes(droplet: droplet)
-            } else {
-                AskBar(model: model)
-                if let s = model.status {
-                    Text(s).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
-                }
-                AskAnswer(model: model)
-                if model.openID == nil { MeetingList(model: model) } else { MeetingDetailView(model: model) }
+            AskBar(model: model)
+            if let s = model.status {
+                Text(s).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
             }
+            AskAnswer(model: model)
+            if model.openID == nil { MeetingList(model: model) } else { MeetingDetailView(model: model) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .environment(\.openURL, OpenURLAction { model.handle($0) ? .handled : .systemAction })
@@ -54,19 +47,14 @@ struct LibrarySurface: View {
 
     private var header: some View {
         HStack(spacing: DroppySpacing.xsm) {
-            if model.openID != nil && !notesShown {
+            if model.openID != nil {
                 Button { model.back() } label: { Image(systemName: "chevron.left") }
                     .buttonStyle(DroppyCircleButtonStyle(size: 24)).accessibilityLabel("Back to meetings")
             } else {
-                Image(systemName: notesShown ? "square.and.pencil" : "waveform").font(.system(size: 12, weight: .medium))
+                Image(systemName: "waveform").font(.system(size: 12, weight: .medium))
             }
-            Text(notesShown ? "Notes" : "Meetings").font(.system(size: 12, weight: .semibold))
+            Text("Meetings").font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 0)
-            if notesShown { TemplateMenu(droplet: droplet) }
-            if droplet.notesInNotch && droplet.session != nil {  // recording, notes live here: switch between the two
-                Button(model.browsing ? "Back to notes" : "Browse meetings") { model.browsing.toggle() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
-            }
         }
         .foregroundStyle(secondary)
     }

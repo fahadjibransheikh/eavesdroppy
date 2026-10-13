@@ -63,6 +63,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private var importPanel: NSOpenPanel?  // open while the import picker is up; it holds the shelf open
     private var permissionTask: Task<Void, Never>?
     private var systemChecked = false
+    private var notesPanel: NotesPanelController?  // lazy: created by the first showNotes, gone when the recording ends
     private let activitySubject = CurrentValueSubject<LiveActivityState?, Never>(nil)
 
     @Published private var phase: Phase = .idle
@@ -84,13 +85,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     /// Folder -> library id of meetings processed this session, so a Recent row opens the meeting in the library.
     private var recentMeetingIDs: [String: Int] = [:]
     private var notesWork: DispatchWorkItem?
-    private(set) var notesFocused = false
 
     var recording: Bool { phase == .recording }
-    /// Droppy can refuse the library surface ("does not publish a surface with that id", seen with approved local
-    /// builds); the notes then live in the shelf widget instead, whatever the setting says.
-    @Published private(set) var surfaceRefused = false
-    var notesInNotch: Bool { prefs.notesInNotch && !surfaceRefused }
 
     var busy: Bool { phase == .starting || phase == .stopping }
     var starting: Bool { phase == .starting }
@@ -137,7 +133,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             defaultShortcut: DropletKeyboardShortcut(keyCode: 45, modifiers: NSEvent.ModifierFlags([.option, .command]).rawValue)
         ) { [weak self] in
             guard let self else { return }
-            if self.recording { self.showNotesInNotch() } else { self.openLibrary() }
+            if self.recording { self.showNotes() } else { self.openLibrary() }
         }
         log("Eavesdroppy activated, sessions at \(sessionsDir.path)")
     }
@@ -177,7 +173,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         timer?.invalidate(); timer = nil
         confirmTimer?.invalidate(); confirmTimer = nil
         library.surfaceClosed(); enrollment.cancel()
-        if notesFocused { _ = host?.shelf.setHoldsOpen(false); notesFocused = false }
+        notesPanel?.teardown(); notesPanel = nil
         if let panel = importPanel { importPanel = nil; _ = host?.shelf.setHoldsOpen(false); panel.cancel(nil) }
         recorder = nil; session = nil; activeDir = nil; phase = .idle; warnings = []; notesText = ""
         confirmingDiscard = false; confirmingDelete = nil
@@ -278,8 +274,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             notify("Recording — let everyone know they're being recorded.", symbol: "mic.fill")
         }
         startedAutomatically = false
-        _ = host?.shelf.invalidateLayout(for: Self.widgetID)  // the widget grows a notes field while recording
-        if notesInNotch { showNotesInNotch() }
+        _ = host?.shelf.invalidateLayout(for: Self.widgetID)  // the widget is shorter while recording
+        showNotes(focus: false)  // opens by itself, but the meeting app keeps the keyboard
     }
 
     private func tick() {
@@ -351,7 +347,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         timer?.invalidate(); timer = nil
         activitySubject.send(nil)
         notesWork?.cancel(); notesWork = nil; notesText = ""
-        if notesFocused { notesFocused = false; _ = host?.shelf.setHoldsOpen(false) }
+        notesPanel?.teardown(); notesPanel = nil
         host?.shelf.invalidateLayout(for: Self.widgetID)
     }
 
@@ -366,21 +362,27 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
     }
 
-    /// The shelf closes when the pointer leaves it; hold it open while the user is typing.
-    func notesFocusChanged(_ focused: Bool) {
-        guard focused != notesFocused else { return }
-        notesFocused = focused
-        _ = host?.shelf.setHoldsOpen(focused)
+    /// Opens (or brings forward) the floating notes window; with no recording it opens the library instead.
+    /// The window can be closed and reopened during a recording; the text lives here, not in the window.
+    func showNotes(focus: Bool = true) {
+        guard recording, let s = session else { openLibrary(); return }
+        if notesPanel == nil {
+            notesPanel = NotesPanelController(
+                content: { [unowned self] in AnyView(NotesPanelView(droplet: self)) },
+                loadFrame: { [weak self] in self?.host?.preferences.value(forKey: Self.notesFrameKey, default: "") ?? "" },
+                saveFrame: { [weak self] in self?.host?.preferences.setValue($0, forKey: Self.notesFrameKey) })
+        }
+        notesPanel?.show(title: "Meeting notes — \(s.title)", focus: focus)
     }
+    private static let notesFrameKey = "notesPanelFrame"
 
     // MARK: library surface and settings
 
-    func presentLibrary() {
+    func openLibrary() {
         presentation = host?.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
-        guard presentation == nil, let host else { return }
-        if !surfaceRefused { surfaceRefused = true; host.shelf.invalidateLayout(for: Self.widgetID) }
-        _ = host.shelf.open(revealing: Self.widgetID)
-        _ = host.shelf.requestKeyboardFocus()
+        // Droppy refuses the surface for some approved local builds ("does not publish a surface with that id"): the
+        // shelf is the nearest thing, with the recent meetings in it.
+        if presentation == nil { _ = host?.shelf.open(revealing: Self.widgetID) }
     }
 
     /// Settings -> Storage: adds meetings already in the Drive folder to the library (idempotent on the Python side).
@@ -393,15 +395,9 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         }
     }
 
-    func openLibrary() { library.browsing = true; presentLibrary() }
-
-    /// The live notes view in the expanded surface; the way to type notes when the widget is compact or the menu bar is closed.
-    func showNotesInNotch() { library.browsing = false; presentLibrary() }
-
     private func prefsChanged() {
         objectWillChange.send()
         automation.reconcile()
-        if phase == .recording { _ = host?.shelf.invalidateLayout(for: Self.widgetID) }  // the notes location may have moved
     }
 
     /// D20: once a day at most, shortly after activation, delete audio older than the retention setting.
@@ -519,7 +515,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     }
 
     func openNotes(_ folder: String) {
-        if let id = recentMeetingIDs[folder] { library.browsing = true; library.open(id); presentLibrary(); return }
+        if let id = recentMeetingIDs[folder] { library.open(id); openLibrary(); return }
         _ = host?.workspace.open(URL(fileURLWithPath: folder + "/notes.md"))
     }
 
@@ -657,6 +653,13 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     }
 
     var clock: String { String(format: "%d:%02d", elapsed / 60, elapsed % 60) }
+
+    /// Harness only (EAVESDROPPY_HARNESS_DEMO=recording): a recording on screen with no audio behind it.
+    func demoRecording() {
+        session = (sessionsDir.appendingPathComponent("demo"), "Weekly sync", ["Priya Nair", "Sam Lee"], Date().addingTimeInterval(-754))
+        phase = .recording; elapsed = 754
+        warnings = ["Call audio unavailable: allow Droppy under Screen & System Audio Recording"]
+    }
 }
 
 // MARK: - Shelf widget
@@ -671,7 +674,7 @@ extension EavesdroppyDroplet: ShelfWidgetProviding {
                 layoutTraits: ShelfWidgetLayoutTraits(
                     preferredSoloWidth: 420,
                     preferredPairedWidth: 210,
-                    contentHeight: .fixed(recording && !notesInNotch ? 300 : 170)  // room for typed notes
+                    contentHeight: .fixed(recording ? 140 : 170)  // call details and buttons, or the jobs list
                 ),
                 focusPolicy: .keyboardFocusable
             )
@@ -712,7 +715,6 @@ private struct EavesdroppyWidget: View {
                 .font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 0)
             if recording {
-                if !droplet.notesInNotch && !context.isCompact { TemplateMenu(droplet: droplet) }
                 Text(droplet.clock).font(.system(size: 12, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
             }
@@ -729,7 +731,7 @@ private struct EavesdroppyWidget: View {
                 .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
             primaryButton
             if recording {
-                Button("Notes") { droplet.showNotesInNotch() }
+                Button("Open notes") { droplet.showNotes() }
                     .buttonStyle(DroppyQuietButtonStyle(size: .small))
             }
         }
@@ -750,18 +752,7 @@ private struct EavesdroppyWidget: View {
     private var soloBody: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
             if let s = droplet.session {
-                HStack(spacing: DroppySpacing.sm) {
-                    Text(s.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
-                    Spacer(minLength: 0)
-                    Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
-                        .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
-                        .disabled(droplet.busy)
-                    primaryButton
-                }
-                if !droplet.warnings.isEmpty {
-                    Text(droplet.warnings.joined(separator: " ")).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
-                }
+                recordingBody(s)
             } else {
                 HStack(spacing: DroppySpacing.sm) {
                     TextField("Meeting title", text: $droplet.titleDraft)
@@ -780,43 +771,67 @@ private struct EavesdroppyWidget: View {
                             .buttonStyle(DroppyQuietButtonStyle(size: .small))
                     }
                 }
-            }
-            if recording && !droplet.notesInNotch {
-                TypedNotes(droplet: droplet)
-            } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: DroppySpacing.xs) {
-                    ForEach(droplet.pending) { j in
-                        row("hourglass", "Processing: \(j.title)…")
-                    }
-                    ForEach(droplet.failed) { f in
-                        VStack(alignment: .leading, spacing: 0) {
-                            HStack(spacing: DroppySpacing.xsm) {
-                                row("exclamationmark.triangle", "Failed: \(f.title)")
-                                Button("Retry") { droplet.retry(f.dir) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
-                                Button(droplet.confirmingDelete == f.dir ? "Confirm delete" : "Delete") { droplet.deleteFailed(f.dir) }
-                                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDelete == f.dir))
-                            }
-                            if let why = f.reason {
-                                Text(why).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2).padding(.leading, 14 + DroppySpacing.xsm)
-                            }
-                        }
-                    }
-                    ForEach(droplet.recent, id: \.self) { path in
-                        Button { droplet.openNotes(path) } label: {
-                            row("doc.text", (path as NSString).lastPathComponent)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Button { droplet.chooseImport() } label: { row("square.and.arrow.down", "Import recording…") }
-                        .buttonStyle(.plain)
-                    Button { droplet.openFolder() } label: { row("folder", "Open meetings folder") }
-                        .buttonStyle(.plain)
-                }
-            }
-            .droppyFlatGlassControls()
+                jobsList
             }
         }
+    }
+
+    /// The call's details; the notes themselves are in the floating window ("Open notes").
+    private func recordingBody(_ s: (dir: URL, title: String, attendees: [String], start: Date)) -> some View {
+        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+            Text(s.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
+            if !s.attendees.isEmpty {
+                Text("With " + s.attendees.joined(separator: ", ")).font(.system(size: 11)).lineLimit(1)
+                    .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+            }
+            if !droplet.warnings.isEmpty {
+                Text(droplet.warnings.joined(separator: " ")).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
+            }
+            HStack(spacing: DroppySpacing.sm) {
+                Button("Open notes") { droplet.showNotes() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
+                Spacer(minLength: 0)
+                Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
+                    .disabled(droplet.busy)
+                primaryButton
+            }
+        }
+    }
+
+    private var jobsList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: DroppySpacing.xs) {
+                ForEach(droplet.pending) { j in
+                    row("hourglass", "Processing: \(j.title)…")
+                }
+                ForEach(droplet.failed) { f in
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: DroppySpacing.xsm) {
+                            row("exclamationmark.triangle", "Failed: \(f.title)")
+                            Button("Retry") { droplet.retry(f.dir) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+                            Button(droplet.confirmingDelete == f.dir ? "Confirm delete" : "Delete") { droplet.deleteFailed(f.dir) }
+                                .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDelete == f.dir))
+                        }
+                        if let why = f.reason {
+                            Text(why).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2).padding(.leading, 14 + DroppySpacing.xsm)
+                        }
+                    }
+                }
+                ForEach(droplet.recent, id: \.self) { path in
+                    Button { droplet.openNotes(path) } label: {
+                        row("doc.text", (path as NSString).lastPathComponent)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button { droplet.chooseImport() } label: { row("square.and.arrow.down", "Import recording…") }
+                    .buttonStyle(.plain)
+                Button { droplet.openFolder() } label: { row("folder", "Open meetings folder") }
+                    .buttonStyle(.plain)
+            }
+        }
+        .droppyFlatGlassControls()
     }
 
     private func row(_ symbol: String, _ text: String) -> some View {
@@ -846,39 +861,31 @@ private struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            if let s = droplet.session {
-                HStack(spacing: DroppySpacing.sm) {
-                    Text(s.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text(droplet.clock).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                }
-                HStack(spacing: DroppySpacing.sm) {
-                    Button("Notes") { droplet.showNotesInNotch() }
-                        .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                    Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
-                        .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
-                        .disabled(droplet.busy)
-                    Spacer(minLength: 0)
-                    Button("Stop & save") { droplet.stopRecording(process: true) }
-                        .buttonStyle(DroppyAccentButtonStyle(color: .red, size: .small))
-                        .disabled(droplet.busy)
-                }
+            if droplet.session != nil {
+                Button("Open notes") { droplet.showNotes() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
+                Button("Stop & save") { droplet.stopRecording(process: true) }
+                    .buttonStyle(DroppyAccentButtonStyle(color: .red, size: .small))
+                    .disabled(droplet.busy)
+                Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
+                    .disabled(droplet.busy)
             } else {
                 Button("Record") { droplet.startRecording() }
                     .buttonStyle(DroppyAccentButtonStyle(size: .small))
                     .disabled(droplet.busy)
+                Button("Open library") { droplet.openLibrary() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
                 if let status {
                     Text(status.text).font(.system(size: 11)).lineLimit(1)
                         .foregroundStyle(status.warn ? Color.orange : AdaptiveColors.primaryTextAuto.opacity(0.7))
                 }
-                Button("Open library") { droplet.openLibrary() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
             }
         }
         .foregroundStyle(AdaptiveColors.primaryTextAuto)
         .padding(.vertical, DroppySpacing.xs)
         // Droppy sizes the menu once, at mount, and never re-measures: both states must share one size or one gets clipped.
-        .frame(width: 280, height: 96, alignment: .topLeading)
+        .frame(width: 280, height: 112, alignment: .topLeading)
     }
 
     private var status: (text: String, warn: Bool)? {

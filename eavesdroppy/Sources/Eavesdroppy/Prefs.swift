@@ -40,7 +40,6 @@ enum NoteTemplate {
     var participantNames: Bool { pref(Key.participantNames, false) }
     var userName: String { let n = pref(Key.userName, "Me").trimmingCharacters(in: .whitespacesAndNewlines); return n.isEmpty ? "Me" : n }
     // Notes
-    var notesInNotch: Bool { pref(Key.notesLocation, "widget") == "notch" }
     var defaultTemplate: String { pref(Key.defaultTemplate, "general") }
     var customTemplate: String { pref(Key.customTemplate, "") }
     // Calendar. Off until the user turns it on: turning it on is what asks for Calendar access.
@@ -61,7 +60,7 @@ enum NoteTemplate {
     enum Key {
         static let echoRemoval = "echoRemoval", consentLine = "consentLine", autoStop = "autoStop"
         static let userName = "userName", voiceprintNaming = "voiceprintNaming"
-        static let notesLocation = "notesLocation", defaultTemplate = "defaultTemplate", customTemplate = "customTemplate"
+        static let defaultTemplate = "defaultTemplate", customTemplate = "customTemplate"
         static let calendarPrompt = "calendarPrompt", calendarAutoStart = "calendarAutoStart"
         static let micPrompt = "micPrompt", participantNames = "participantNames"
         static let remindersList = "remindersList", linearTeamID = "linearTeamID", linearTeamName = "linearTeamName"

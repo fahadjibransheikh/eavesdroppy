@@ -31,8 +31,6 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     @Published private(set) var detailError: String?
     @Published var tab: DetailTab = .notes
     @Published var focusTurn: Int?
-    /// Notes-in-the-notch mode only: the user chose to browse meetings instead of typing notes.
-    @Published var browsing = false
     @Published var status: String?
     @Published private(set) var busy: String?
     @Published var regenTemplate = "general"

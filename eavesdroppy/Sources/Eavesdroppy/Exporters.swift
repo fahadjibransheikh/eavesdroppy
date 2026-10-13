@@ -208,9 +208,10 @@ extension EavesdroppyDroplet {
                 let detail = MeetingDetail(summary: summary, attendees: ["Priya Nair", "Sam Lee"], notes: "## Summary\n- Shipped the beta [00:40]\n- Priya owns the rollout plan",
                                            userNotes: "", speakers: speakers, turns: turns, actions: [])
                 library.demo(detail: detail, people: people, tab: what == "speakers" ? .speakers : .notes, askPerson: what == "askperson" ? people[1] : nil)
-                presentLibrary()
+                openLibrary()
             case "olddroplet": notify("Remove the old Meetings droplet in Settings › Store › Local droplets", symbol: "exclamationmark.triangle.fill",
                                       detail: "It is replaced by Eavesdroppy, and two recorders would both offer to start.")
+            case "recording": demoRecording()
             case "link": library.exportLink = ("Open ENG-142 in Linear", URL(string: "https://linear.app/example/issue/ENG-142")!)
             default: automation.demo(what)
             }

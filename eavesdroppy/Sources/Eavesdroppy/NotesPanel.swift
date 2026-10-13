@@ -43,7 +43,7 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
         p.delegate = nil; p.contentView = nil; p.orderOut(nil)
     }
 
-    private func makePanel() -> NotesPanel {
+    func makePanel() -> NotesPanel {  // internal: the panel shot test builds the real window
         let p = NotesPanel(contentRect: Self.restoredFrame(loadFrame(), screens: NSScreen.screens.map(\.visibleFrame))
                                         ?? Self.defaultFrame(in: (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame),
                            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],

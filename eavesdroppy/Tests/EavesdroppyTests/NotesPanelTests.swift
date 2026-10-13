@@ -29,15 +29,15 @@ import Testing
         _ = NSApplication.shared
         let droplet = EavesdroppyDroplet()
         droplet.notesText = "## Agenda\n- Rollout plan\n- Pricing\n\nAction: Priya to send the deck"
-        let size = NSSize(width: 420, height: 340)
-        let view = NSHostingView(rootView: NotesPanelView(droplet: droplet).environment(\.colorScheme, .dark))
-        view.appearance = NSAppearance(named: .darkAqua)
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(white: 0.08, alpha: 1)
-        window.contentView = view
-        view.layoutSubtreeIfNeeded()
+        // The real window (style mask, transparent title bar), so the title bar and traffic lights are in the picture.
+        let controller = NotesPanelController(content: { AnyView(NotesPanelView(droplet: droplet)) }, loadFrame: { "" }, saveFrame: { _ in })
+        let window = controller.makePanel()
+        window.title = "Weekly sync"
+        window.setFrame(NSRect(origin: .zero, size: NotesPanelController.defaultSize), display: false)
+        let frameView = try #require(window.contentView?.superview)
+        frameView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let view = frameView
         let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)
         try #require(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: out))

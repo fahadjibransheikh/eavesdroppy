@@ -29,12 +29,22 @@ private func onMain(_ f: @escaping @MainActor () -> Void) { DispatchQueue.main.a
 /// Typed notes are written here, in order, never on the main or audio queue.
 private let notesQ = DispatchQueue(label: "eavesdroppy.notes", qos: .utility)
 
-private let silentCallAudio = "Call audio was silent — check Screen & System Audio Recording permission for Droppy"
+/// The one wording for "the system-audio tap gave nothing": the widget, the notes window and the live activity all key off it.
+let noCallAudio = "No call audio. Allow Droppy in Screen & System Audio Recording."
 
 /// Seconds without a single call-audio sample before the permission warning. The system tap can take ~40 s to
 /// deliver its first buffer and then record fine, so anything shorter is a false alarm.
 private let silentCallAudioGrace = 60
 func callAudioMissing(elapsed: Int, frames: Int64) -> Bool { elapsed >= silentCallAudioGrace && frames == 0 }
+
+/// Card content height for a HUD: one title line is 52, a second title line, a detail (up to three lines) and one
+/// button row each add what they need. The estimate counts characters; it only has to be generous enough not to clip.
+func hudCardHeight(title: String, detail: String?, hasAction: Bool) -> CGFloat {
+    func lines(_ s: String, perLine: Int, atMost: Int) -> CGFloat { CGFloat(min(atMost, max(1, (s.count + perLine - 1) / perLine))) }
+    var h: CGFloat = 52 + (lines(title, perLine: 36, atMost: 2) - 1) * 17
+    if let detail { h += 24 + (lines(detail, perLine: 52, atMost: 3) - 1) * 14 }
+    return h + (hasAction ? 34 : 0)
+}
 
 /// Records mic + call audio, then hands the session to process_meeting.py.
 @MainActor
@@ -257,7 +267,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         if let error {
             log("ERROR start failed: \(error)")
             activeDir = nil; phase = .idle
-            notify("Could not start recording", symbol: "exclamationmark.triangle.fill", detail: "\(error)")
+            notify("Couldn't start recording", symbol: "exclamationmark.triangle.fill",
+                   detail: "Eavesdroppy couldn't open the audio. Check the microphone and the disk, then try again.")  // the raw error is logged above
             return
         }
         recorder = rec
@@ -265,13 +276,13 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         session = (dir, title, attendees, start)
         phase = .recording
         elapsed = 0; systemChecked = false
-        warnings = rec.systemWarning == nil ? [] : ["Call audio unavailable: allow Droppy under Screen & System Audio Recording"]
+        warnings = rec.systemWarning == nil ? [] : [noCallAudio]
         log("recording started: \(title) -> \(dir.path)")
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in MainActor.assumeIsolated { self.tick() } }
         publishActivity()
         automation.recordingStarted()
         if prefs.consentLine || startedAutomatically {  // nobody clicked an automatic start, so it always says so
-            notify("Recording — let everyone know they're being recorded.", symbol: "mic.fill")
+            notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")
         }
         startedAutomatically = false
         _ = host?.shelf.invalidateLayout(for: Self.widgetID)  // the widget is shorter while recording
@@ -284,7 +295,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         // No call audio at all after a full minute: the permission is almost certainly off.
         if !systemChecked, let st = recorder?.system, callAudioMissing(elapsed: elapsed, frames: st.frames) {
             systemChecked = true
-            addWarning(silentCallAudio)
+            addWarning(noCallAudio)
         }
         automation.tick(elapsed: elapsed)
     }
@@ -292,13 +303,15 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private func addWarning(_ w: String) {
         guard session != nil, !warnings.contains(w) else { return }
         warnings.append(w)
-        notify(w, symbol: "exclamationmark.triangle.fill")
+        if w == noCallAudio { notify("No call audio", symbol: "exclamationmark.triangle.fill", detail: "Allow Droppy in Screen & System Audio Recording.") }
+        else { notify("Recording problem", symbol: "exclamationmark.triangle.fill", detail: w) }
     }
 
     /// A track can't be written (disk full): stop with what we have rather than record into the void.
     private func recordingBroke(_ why: String) {
         guard phase == .recording else { return }
-        notify("Recording stopped", symbol: "exclamationmark.triangle.fill", detail: "\(why). What was captured is saved under Failed.")
+        // The one `.high`: the recording itself is at risk. (`.high` is documented as "the user acted on it", so nothing else claims it.)
+        notify("Recording stopped", symbol: "exclamationmark.triangle.fill", detail: "\(why). What was captured is saved under Failed.", priority: .high)
         stopRecording(process: false)
     }
 
@@ -312,7 +325,9 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             guard epoch == currentEpoch() else { return }
             let sysDown = rec.systemWarning != nil
             self.endSession()
-            if r.systemSilent && !sysDown { self.notify(silentCallAudio, symbol: "exclamationmark.triangle.fill") }
+            if r.systemSilent && !sysDown {
+                self.notify("No call audio was recorded", symbol: "exclamationmark.triangle.fill", detail: "Allow Droppy in Screen & System Audio Recording, then record again.")
+            }
             if process { self.enqueue(s.dir, title: s.title) } else { self.refreshFailed() }
         }
     }
@@ -434,8 +449,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                     MainActor.assumeIsolated {
                         guard epoch == currentEpoch(), let host = self.host else { return }
-                        if self.notify("Remove the old Meetings droplet in Settings › Store › Local droplets", symbol: "exclamationmark.triangle.fill",
-                                       detail: "It is replaced by Eavesdroppy, and two recorders would both offer to start.") {
+                        if self.notify("Remove the old Meetings droplet", symbol: "exclamationmark.triangle.fill",
+                                       detail: "In Settings › Store › Local droplets. Eavesdroppy replaces it, and two recorders would both offer to start.") {
                             host.preferences.setValue(true, forKey: "oldDropletNoticed")
                         }
                     }
@@ -467,10 +482,13 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             recent = Array(([folder] + recent.filter { $0 != folder }).prefix(5))
             host?.preferences.setValue(recent, forKey: "recent")
             library.refresh()
-            notify("Notes ready: \(title)", symbol: warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                   detail: warnings.isEmpty ? nil : warnings.joined(separator: " "))
+            notify("Notes ready", symbol: warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                   detail: warnings.isEmpty ? title : "\(title). \(warnings.joined(separator: " "))",
+                   action: ("Open", { [weak self] in self?.openNotes(folder) }))
         case .failed(let why):
-            notify("Processing failed: \(title)", symbol: "exclamationmark.triangle.fill", detail: why)
+            // The shelf keeps its own Retry for this; a HUD button is unverified in a real Droppy.
+            notify("Couldn't write notes", symbol: "exclamationmark.triangle.fill", detail: "\(title): \(why)",
+                   action: ("Retry", { [weak self] in self?.retry(dir) }))
         }
         refreshFailed()
     }
@@ -526,7 +544,9 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
                 try StoreMirror.checkOutRoot(root)  // never mkdir -p into a Drive path whose mount is not there
                 try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
             } catch {
-                onMain { self.notify("Output folder not available", symbol: "exclamationmark.triangle.fill", detail: "\(error)") }; return
+                log("ERROR output folder: \(error)")
+                onMain { self.notify("Output folder not available", symbol: "exclamationmark.triangle.fill",
+                                     detail: "Droppy can't reach the meetings folder. Check the drive is connected, or choose another folder in Settings.") }; return
             }
             onMain { _ = self.host?.workspace.open(URL(fileURLWithPath: root)) }
         }
@@ -583,7 +603,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
                     onMain {
                         guard epoch == currentEpoch() else { return }
                         self.pending.removeAll { $0.dir == dir }
-                        self.notify("Import failed: \(title)", symbol: "exclamationmark.triangle.fill", detail: error.localizedDescription)
+                        self.notify("Import failed", symbol: "exclamationmark.triangle.fill", detail: "\(title): \(error.localizedDescription)")
                     }
                 }
             }
@@ -614,37 +634,43 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     func focusTitle() { _ = host?.shelf.requestKeyboardFocus() }
 
-    /// A strip for short text; a card (title + wrapped detail) when there is detail or the text is long.
+    /// Always a card: a strip puts its content across the camera housing, and a sentence does not fit in the two
+    /// wings. The strip form a request must also carry is the glyph alone, at the far left. `action` is one quiet
+    /// button on the card (it also dismisses the card).
     @discardableResult
-    func notify(_ text: String, symbol: String, detail: String? = nil) -> Bool {
-        log("notify: \(text)\(detail.map { " (\($0))" } ?? "")")
-        let card = detail != nil || text.count > 34
+    func notify(_ title: String, symbol: String, detail: String? = nil, priority: DropletHUDPriority = .normal,
+                action: (label: String, run: @MainActor () -> Void)? = nil) -> Bool {
+        log("notify: \(title)\(detail.map { " (\($0))" } ?? "")")
+        let id = "eavesdroppy.notice"
         return host?.hud.present(DropletHUDRequest(
-            id: "eavesdroppy.notice", duration: card ? 8 : 4,
-            accessibilityLabel: [text, detail].compactMap { $0 }.joined(separator: ". "),
-            isExpanded: card, expandedContentHeight: detail == nil ? 52 : 76,
+            id: id, duration: action == nil ? 8 : 10, priority: priority,
+            accessibilityLabel: [title, detail].compactMap { $0 }.joined(separator: ". "),
+            isExpanded: true, expandedContentHeight: hudCardHeight(title: title, detail: detail, hasAction: action != nil),
             content: {
-                // Glyph at the far left, text at the far right: the middle of a strip is the camera housing.
+                // The glyph at the far left; the middle of a strip is the camera housing and each wing holds a glyph, not words.
                 HStack(spacing: 0) {
-                    Image(systemName: symbol)
-                        .font(.system(size: DroppyLiveActivityMetrics.iconSize, weight: .semibold))
+                    Image(systemName: symbol).font(.system(size: DroppyLiveActivityMetrics.iconSize, weight: .semibold))
                     Spacer(minLength: 0)
-                    Text(verbatim: text)
-                        .font(.system(size: DroppyLiveActivityMetrics.labelFontSize, weight: .semibold))
-                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
                 .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
             },
-            expanded: {
+            expanded: { [weak self] in
                 VStack(alignment: .leading, spacing: DroppySpacing.xs) {
                     HStack(alignment: .top, spacing: DroppySpacing.sm) {
                         Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
-                        Text(verbatim: text).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                        Text(verbatim: title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                     }
                     if let detail {
                         Text(verbatim: detail).font(.system(size: 11)).lineLimit(3)
                             .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+                    }
+                    if let action {
+                        HStack {
+                            Spacer(minLength: 0)
+                            Button(action.label) { self?.host?.hud.dismiss(id: id); action.run() }
+                                .buttonStyle(DroppyQuietButtonStyle(size: .small))
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -658,7 +684,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     func demoRecording() {
         session = (sessionsDir.appendingPathComponent("demo"), "Weekly sync", ["Priya Nair", "Sam Lee"], Date().addingTimeInterval(-754))
         phase = .recording; elapsed = 754
-        warnings = ["Call audio unavailable: allow Droppy under Screen & System Audio Recording"]
+        warnings = [noCallAudio]
     }
 }
 

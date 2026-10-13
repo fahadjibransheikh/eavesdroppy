@@ -49,6 +49,8 @@ struct PromptCard: View {
                     Text(verbatim: model.subtitle).font(.system(size: 11)).monospacedDigit().lineLimit(1)
                         .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
                 }
+                .accessibilityElement(children: .ignore)  // so VoiceOver reads the countdown as the value, not as new text each second
+                .accessibilityLabel(model.title).accessibilityValue(model.subtitle)
                 Spacer(minLength: 0)
             }
             HStack(spacing: DroppySpacing.sm) {
@@ -61,7 +63,8 @@ struct PromptCard: View {
     }
 }
 
-/// The strip form (a card is always requested, but a request needs both shapes): glyph at the far left, text at the far right.
+/// The strip form (a card is always requested, but a request needs both shapes): the glyph at the far left. The
+/// middle of a strip is the camera housing and each wing holds a glyph, not words.
 struct PromptStrip: View {
     @ObservedObject var model: PromptModel
 
@@ -69,7 +72,6 @@ struct PromptStrip: View {
         HStack(spacing: 0) {
             Image(systemName: model.symbol).font(.system(size: DroppyLiveActivityMetrics.iconSize, weight: .semibold))
             Spacer(minLength: 0)
-            Text(verbatim: model.title).font(.system(size: DroppyLiveActivityMetrics.labelFontSize, weight: .semibold)).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)

@@ -1,0 +1,45 @@
+{
+  "id": "eavesdroppy",
+  "name": "Eavesdroppy",
+  "version": "1.0.0",
+  "summary": "Bot-free meeting notes: records calls, writes notes",
+  "description": "Bot-free meeting notes: records your calls, transcribes locally, writes notes.\n\nRecords your microphone and call audio from the shelf, then runs the local meeting pipeline to produce a transcript and notes. Type your own notes while you talk, browse and search every meeting, rename speakers, play audio from any line, and ask questions across your meetings. You can also drop in an existing recording. Offers to record before calendar events and when a call app starts using the microphone, and sends action items to Reminders or Linear. A live activity shows the recording timer in the notch.",
+  "category": "Productivity",
+  "kit": {
+    "abi": 1,
+    "minAPI": "1.18.0"
+  },
+  "minAppVersion": "15.3.0",
+  "capabilities": [
+    "microphone",
+    "calendars",
+    "reminders",
+    "accessibility",
+    "hud",
+    "shelf-write",
+    "expanded-surface",
+    "global-shortcuts",
+    "menu-bar",
+    "network-server",
+    "clipboard-write"
+  ],
+  "surfaces": [
+    "shelf-widget",
+    "live-activity",
+    "expanded-surface",
+    "settings-pane",
+    "menu-bar-extra"
+  ],
+  "icon": "Eavesdroppy.icon",
+  "creator": {
+    "name": "Fahad Sheikh",
+    "kind": "community",
+    "avatar": "Creator.png"
+  },
+  "source": {
+    "repository": "https://gitlab.com/droppyformac1/droplets/-/tree/main/droplets/eavesdroppy",
+    "license": "MIT"
+  },
+  "screenshots": [],
+  "keywords": []
+}

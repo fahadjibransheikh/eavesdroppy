@@ -1,0 +1,6 @@
+cffi==2.1.1
+numpy==2.5.4
+pycparser==3.11
+scipy==1.18.1
+soundfile==0.14.0
+typing-extensions==4.16.0

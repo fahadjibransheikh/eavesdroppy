@@ -1,0 +1,71 @@
+diff --git a/FastClusterWrapper/include/module.modulemap b/FastClusterWrapper/include/module.modulemap
+index f15fd0e..eb8cff4 100644
+--- a/FastClusterWrapper/include/module.modulemap
++++ b/FastClusterWrapper/include/module.modulemap
+@@ -1,4 +1,5 @@
+ module FastClusterWrapper {
+     header "FastClusterWrapper.h"
+     export *
++    link "c++"
+ }
+diff --git a/FluidAudio/Diarizer/DiarizerTimeline.swift b/FluidAudio/Diarizer/DiarizerTimeline.swift
+index 35ec723..6d933b0 100644
+--- a/FluidAudio/Diarizer/DiarizerTimeline.swift
++++ b/FluidAudio/Diarizer/DiarizerTimeline.swift
+@@ -865,9 +865,9 @@ public class DiarizerTimeline {
+         )
+ 
+         return DiarizerTimelineUpdate(
+-            finalizedSegments: consume newFinalized,
+-            tentativeSegments: consume newTentative,
+-            chunkResult: consume chunk
++            finalizedSegments: newFinalized,
++            tentativeSegments: newTentative,
++            chunkResult: chunk
+         )
+     }
+ 
+@@ -996,9 +996,9 @@ public class DiarizerTimeline {
+         }
+ 
+         return DiarizerTimelineUpdate(
+-            finalizedSegments: consume newFinalized,
+-            tentativeSegments: consume newTentative,
+-            chunkResult: consume chunk
++            finalizedSegments: newFinalized,
++            tentativeSegments: newTentative,
++            chunkResult: chunk
+         )
+     }
+ 
+diff --git a/FluidAudio/Diarizer/LS-EEND/LSEENDPreprocessor.swift b/FluidAudio/Diarizer/LS-EEND/LSEENDPreprocessor.swift
+index 04f16b5..6dd7363 100644
+--- a/FluidAudio/Diarizer/LS-EEND/LSEENDPreprocessor.swift
++++ b/FluidAudio/Diarizer/LS-EEND/LSEENDPreprocessor.swift
+@@ -11,6 +11,8 @@ public class LSEENDFeatureProvider {
+         let cmnMean: [Float]
+         let cmnCount: Int
+         let decoderMaskEnd: Int
++
++        consuming func takeState() -> LSEENDState { state }
+     }
+ 
+     /// Number of mel chunks currently ready for `emitNextChunk()`.
+@@ -44,7 +46,7 @@ public class LSEENDFeatureProvider {
+ 
+     // MARK: - Init
+     public init(
+-        from metadata: borrowing LSEENDMetadata,
++        from metadata: LSEENDMetadata,
+         restoringFrom snapshot: consuming Snapshot? = nil
+     ) throws {
+         self.nMels = metadata.nMels
+@@ -89,7 +91,7 @@ public class LSEENDFeatureProvider {
+             self.cmnMean = snapshot.cmnMean
+             self.cmnCount = snapshot.cmnCount
+             self.decoderMaskEnd = snapshot.decoderMaskEnd
+-            self.input = try LSEENDInput(from: metadata, state: consume snapshot.state)
++            self.input = try LSEENDInput(from: metadata, state: snapshot.takeState())
+         } else {
+             self.melQueue = StreamingChunkQueue(
+                 chunkLength: chunkMels,

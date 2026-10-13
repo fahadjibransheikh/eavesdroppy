@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "droppykit": {
+      "command": "/Users/fahad/code/droppykit/Scripts/droppykit",
+      "args": [
+        "mcp",
+        "--package",
+        "/Users/fahad/code/eavesdroppy/eavesdroppy"
+      ]
+    }
+  }
+}

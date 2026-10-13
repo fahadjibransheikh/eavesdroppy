@@ -987,38 +987,46 @@ private struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            if droplet.session != nil {
-                Button("Open notes") { droplet.showNotes() }
+            if let s = droplet.session {
+                Text("\(s.title) · \(droplet.clock)").font(.system(size: 11)).monospacedDigit().lineLimit(1)
+                    .foregroundStyle(AdaptiveColors.primaryTextAuto.opacity(0.7))
+                    .padding(.horizontal, DroppySpacing.xs)
+                Button { droplet.showNotes() } label: { row("Open notes") }
                     .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                Button("Stop & save") { droplet.stopRecording(process: true) }
-                    .buttonStyle(DroppyAccentButtonStyle(color: .red, size: .small))
+                Button { droplet.stopRecording(process: true) } label: { row("Stop") }
+                    .buttonStyle(DroppyAccentButtonStyle(color: StateColor.destructive, size: .small))
                     .disabled(droplet.busy)
-                Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
+                Button { droplet.discard() } label: { row(droplet.confirmingDiscard ? "Confirm discard" : "Discard") }
                     .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
                     .disabled(droplet.busy)
             } else {
-                Button("Record") { droplet.startRecording() }
+                Button { droplet.startRecording() } label: { row("Record") }
                     .buttonStyle(DroppyAccentButtonStyle(size: .small))
                     .disabled(droplet.busy)
-                Button("Open library") { droplet.openLibrary() }
+                Button { droplet.openLibrary() } label: { row("Open meetings") }
                     .buttonStyle(DroppyQuietButtonStyle(size: .small))
                 if let status {
                     Text(status.text).font(.system(size: 11)).lineLimit(1)
-                        .foregroundStyle(status.warn ? Color.orange : AdaptiveColors.primaryTextAuto.opacity(0.7))
+                        .foregroundStyle(status.warn ? StateColor.warning : AdaptiveColors.primaryTextAuto.opacity(0.7))
+                        .padding(.horizontal, DroppySpacing.xs)
                 }
             }
         }
         .foregroundStyle(AdaptiveColors.primaryTextAuto)
         .padding(.vertical, DroppySpacing.xs)
         // Droppy sizes the menu once, at mount, and never re-measures: both states must share one size or one gets clipped.
-        .frame(width: 280, height: 112, alignment: .topLeading)
+        // The taller state (recording: a status line and three buttons) sets the height.
+        .frame(width: 220, height: 128, alignment: .topLeading)
     }
+
+    /// The whole row is the hit target, not the shrink-wrapped label.
+    private func row(_ title: String) -> some View { Text(title).frame(maxWidth: .infinity, alignment: .leading) }
 
     private var status: (text: String, warn: Bool)? {
         if let p = droplet.permissionProblem { return (p, true) }
         if droplet.starting { return ("Starting…", false) }
         if !droplet.pending.isEmpty { return ("Processing \(droplet.pending.count)…", false) }
-        if !droplet.failed.isEmpty { return ("\(droplet.failed.count) failed — open the library to retry", true) }
+        if !droplet.failed.isEmpty { return ("\(droplet.failed.count) failed — open meetings to retry", true) }
         return nil
     }
 }

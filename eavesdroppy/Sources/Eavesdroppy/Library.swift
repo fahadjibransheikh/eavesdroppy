@@ -80,10 +80,26 @@ enum Fmt {
     private static let isoFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
-    private static let day: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE d MMM, h:mm a"; return f }()
 
     static func parseISO(_ s: String) -> Date? { iso.date(from: s) ?? isoFrac.date(from: s) }
-    static func when(_ s: String) -> String { parseISO(s).map { day.string(from: $0) } ?? s }
+
+    /// "Today, 2:30 PM", "Yesterday, 11:30 PM", "Mon, 9:00 AM" within the last week, else "12 Oct, 11:30 PM" (with the
+    /// year when it is not this one). Locale-aware: a 24-hour locale gets "14:30".
+    static func when(_ s: String, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+        guard let d = parseISO(s) else { return s }
+        let time = d.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: calendar.timeZone))
+        let day: String
+        if calendar.isDate(d, inSameDayAs: now) { day = "Today" }
+        else if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(d, inSameDayAs: y) { day = "Yesterday" }
+        else if let w = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)), d >= w, d <= now {
+            day = d.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.abbreviated))
+        } else {
+            var f = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).day().month(.abbreviated)
+            if !calendar.isDate(d, equalTo: now, toGranularity: .year) { f = f.year() }
+            day = d.formatted(f)
+        }
+        return "\(day), \(time)"
+    }
     /// "1h 05m" / "25m" / "—"
     static func length(_ sec: Double) -> String {
         let m = safeInt((sec / 60).rounded())

@@ -24,6 +24,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
 
     @Published var query = "" { didSet { if query != oldValue { scheduleSearch() } } }
     @Published private(set) var meetings: [MeetingSummary] = []
+    /// The newest meetings whatever the search says, for the shelf widget's Recent rows.
+    @Published private(set) var recents: [MeetingSummary] = []
     @Published private(set) var loaded = false
     @Published private(set) var listError: String?
     @Published private(set) var openID: Int?
@@ -88,7 +90,9 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
                 guard let self, gen == self.listGen else { return }
                 self.loaded = true
                 switch r {
-                case .success(let m): self.meetings = m; self.listError = nil
+                case .success(let m):
+                    self.meetings = m; self.listError = nil
+                    if q.isEmpty { self.recents = Array(m.prefix(3)) }
                 case .failure(let e): self.listError = "\(e)"
                 }
             }
@@ -153,8 +157,11 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     /// Harness only (EAVESDROPPY_HARNESS_DEMO): a meeting on screen without a database behind it.
     func demo(detail d: MeetingDetail, people p: [PersonRow], tab t: DetailTab, askPerson a: PersonRow? = nil) {
         demoMode = true
-        meetings = [d.summary]; loaded = true; openID = d.summary.id; detail = d; people = p; tab = t; askPerson = a
+        meetings = [d.summary]; recents = meetings; loaded = true; openID = d.summary.id; detail = d; people = p; tab = t; askPerson = a
     }
+
+    /// Harness only: Recent rows for the widget's shot.
+    func demoRecents(_ r: [MeetingSummary]) { demoMode = true; recents = r }
 
     /// Leaving the surface (dismissed, or the droplet deactivating): playback must not outlive it.
     func surfaceClosed() { player.stop() }

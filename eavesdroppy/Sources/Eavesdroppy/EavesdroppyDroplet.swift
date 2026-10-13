@@ -37,6 +37,28 @@ let noCallAudio = "No call audio. Allow Droppy in Screen & System Audio Recordin
 private let silentCallAudioGrace = 60
 func callAudioMissing(elapsed: Int, frames: Int64) -> Bool { elapsed >= silentCallAudioGrace && frames == 0 }
 
+/// "12:34", and "1:15:12" from one hour on (the wing and the shelf header both show it).
+func clockText(_ seconds: Int) -> String {
+    let s = max(seconds, 0), h = s / 3600, m = s % 3600 / 60
+    return h > 0 ? String(format: "%d:%02d:%02d", h, m, s % 60) : String(format: "%d:%02d", m, s % 60)
+}
+
+/// The shelf widget's height from what it shows. Every composition (solo and paired) lays out to the same rows, so
+/// one number serves both. 16 is the content insets, 20 the header, 8 the gap between rows, 30 a button or field row.
+func shelfWidgetHeight(recording: Bool, attendees: Bool, warning: Bool, permissionProblem: Bool, rows: Int) -> CGFloat {
+    var h: CGFloat = 16 + 20 + 8
+    if recording {
+        h += 17 + 8 + 30                    // title, buttons
+        if attendees { h += 8 + 15 }
+        if warning { h += 8 + 30 }
+    } else {
+        h += 30                             // title field and Record
+        if permissionProblem { h += 8 + 30 }
+        if rows > 0 { h += 8 + CGFloat(rows) * 22 + 10 }  // the scroll view needs 8 beyond its rows (+2 was clipped in the notch shot, +10 fits)
+    }
+    return min(h, 170)
+}
+
 /// Card content height for a HUD: one title line is 52, a second title line, a detail (up to three lines) and one
 /// button row each add what they need. The estimate counts characters; it only has to be generous enough not to clip.
 func hudCardHeight(title: String, detail: String?, hasAction: Bool) -> CGFloat {
@@ -75,16 +97,17 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private var systemChecked = false
     private var notesPanel: NotesPanelController?  // lazy: created by the first showNotes, gone when the recording ends
     private let activitySubject = CurrentValueSubject<LiveActivityState?, Never>(nil)
+    private var declaredHeight: CGFloat = 0  // what widgetDescriptors last told the host
+    private var heightSub: AnyCancellable?
 
     @Published private var phase: Phase = .idle
     @Published private(set) var session: (dir: URL, title: String, attendees: [String], start: Date)?
     @Published private(set) var elapsed = 0
     @Published private(set) var warnings: [String] = []
     @Published private(set) var pending: [Job] = []  // running + queued (+ importing)
-    @Published private(set) var recent: [String] = []
     @Published private(set) var failed: [FailedJob] = []
     @Published private(set) var permissionProblem: String?
-    @Published var titleDraft = "Meeting"
+    @Published var titleDraft = ""  // empty shows the placeholder; startRecording falls back to "Meeting"
     @Published var confirmingDiscard = false
     @Published var confirmingDelete: URL?
     /// Typed notes for the recording in progress; saved to <session>/notes.txt 1 s after the last keystroke.
@@ -97,6 +120,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private var notesWork: DispatchWorkItem?
 
     var recording: Bool { phase == .recording }
+    var callAudioProblem: Bool { warnings.contains(noCallAudio) }
 
     var busy: Bool { phase == .starting || phase == .stopping }
     var starting: Bool { phase == .starting }
@@ -112,7 +136,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         }
         sessionsDir = host.environment.containerDirectory.appendingPathComponent("sessions")
         containerDir = host.environment.containerDirectory
-        recent = host.preferences.value(forKey: "recent", default: [String]())
+        heightSub = Publishers.Merge(objectWillChange.map { _ in () }, library.objectWillChange.map { _ in () })
+            .receive(on: DispatchQueue.main).sink { [weak self] in self?.reconcileHeight() }
         prefs.onChange = { [weak self] in self?.prefsChanged() }
         prefs.attach(host.preferences)
         providerSettings.attach(ProviderPrefs(get: { [prefs] in prefs.pref($0, "") }, set: { [prefs] in prefs.set($0, $1) }))
@@ -182,6 +207,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         permissionTask?.cancel(); permissionTask = nil
         timer?.invalidate(); timer = nil
         confirmTimer?.invalidate(); confirmTimer = nil
+        heightSub = nil
         library.surfaceClosed(); enrollment.cancel()
         notesPanel?.teardown(); notesPanel = nil
         if let panel = importPanel { importPanel = nil; _ = host?.shelf.setHoldsOpen(false); panel.cancel(nil) }
@@ -236,6 +262,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     func openMicSettings() { host?.permissions.openSystemSettings(for: .microphone) }
 
+    /// workspace.open refuses the System Settings URL scheme (only http, https, mailto and file), so this goes through the
+    /// permissions service, which knows the Screen & System Audio Recording pane.
+    func openScreenAudioSettings() { host?.permissions.openSystemSettings(for: .screenCapture) }
+
     private func begin(title: String, attendees: [String]) {
         guard host != nil, phase == .starting else { return }
         let start = Date(), dir = newSessionDir(start), epoch = currentEpoch()
@@ -285,7 +315,6 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")
         }
         startedAutomatically = false
-        _ = host?.shelf.invalidateLayout(for: Self.widgetID)  // the widget is shorter while recording
         showNotes(focus: false)  // opens by itself, but the meeting app keeps the keyboard
     }
 
@@ -363,7 +392,6 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         activitySubject.send(nil)
         notesWork?.cancel(); notesWork = nil; notesText = ""
         notesPanel?.teardown(); notesPanel = nil
-        host?.shelf.invalidateLayout(for: Self.widgetID)
     }
 
     // MARK: typed notes
@@ -479,8 +507,6 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         switch r {
         case .ok(let folder, let warnings, let meetingID):
             if let meetingID { recentMeetingIDs[folder] = meetingID }
-            recent = Array(([folder] + recent.filter { $0 != folder }).prefix(5))
-            host?.preferences.setValue(recent, forKey: "recent")
             library.refresh()
             notify("Notes ready", symbol: warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                    detail: warnings.isEmpty ? title : "\(title). \(warnings.joined(separator: " "))",
@@ -587,7 +613,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         let media = urls.filter { $0.isFileURL && Self.isMedia($0) }
         if media.count < urls.count { notify("Not an audio or video file", symbol: "exclamationmark.triangle.fill") }
         let typed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let custom = media.count == 1 && !typed.isEmpty && typed != "Meeting" ? typed : nil
+        let custom = media.count == 1 && !typed.isEmpty ? typed : nil
         let epoch = currentEpoch()
         for url in media {
             let title = custom ?? url.deletingPathExtension().lastPathComponent
@@ -678,7 +704,19 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             })) ?? false
     }
 
-    var clock: String { String(format: "%d:%02d", elapsed / 60, elapsed % 60) }
+    var clock: String { clockText(elapsed) }
+
+    /// Harness only (EAVESDROPPY_HARNESS_DEMO=rows): a job being written, a failed one and three recent meetings.
+    func demoRows() {
+        pending = [Job(dir: sessionsDir.appendingPathComponent("demo-a"), title: "Design review")]
+        failed = [FailedJob(dir: sessionsDir.appendingPathComponent("demo-b"), title: "Customer call", reason: "The notes tool is not installed")]
+        let now = Date()
+        func iso(_ ago: TimeInterval) -> String { ISO8601DateFormatter().string(from: now.addingTimeInterval(-ago)) }
+        func m(_ i: Int, _ t: String, _ ago: TimeInterval, _ open: Int) -> MeetingSummary {
+            MeetingSummary(id: i, title: t, start: iso(ago), duration: 1860, source: "record", template: "general", summaryStatus: "ok", folder: nil, audioPath: nil, openActions: open)
+        }
+        library.demoRecents([m(1, "Weekly sync", 3600, 2), m(2, "1:1 with Priya", 86_400 + 3600, 0), m(3, "Roadmap planning", 4 * 86_400, 1)])
+    }
 
     /// Harness only (EAVESDROPPY_HARNESS_DEMO=recording): a recording on screen with no audio behind it.
     func demoRecording() {
@@ -690,9 +728,26 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
 // MARK: - Shelf widget
 
+extension EavesdroppyDroplet {
+    /// Rows the idle widget lists: running and queued jobs, failed sessions, and the recent meetings.
+    private var listRows: Int { pending.count + failed.count + library.recents.count }
+
+    var widgetHeight: CGFloat {
+        shelfWidgetHeight(recording: session != nil, attendees: !(session?.attendees.isEmpty ?? true), warning: !warnings.isEmpty,
+                          permissionProblem: permissionProblem != nil, rows: listRows)
+    }
+
+    /// Asks the host to re-measure only when the declared height changed: never per tick, never per keystroke.
+    func reconcileHeight() {
+        guard host != nil, widgetHeight != declaredHeight else { return }
+        host?.shelf.invalidateLayout(for: Self.widgetID)
+    }
+}
+
 extension EavesdroppyDroplet: ShelfWidgetProviding {
     public var widgetDescriptors: [ShelfWidgetDescriptor] {
-        [
+        declaredHeight = widgetHeight
+        return [
             ShelfWidgetDescriptor(
                 id: "eavesdroppy",
                 title: "Eavesdroppy",
@@ -700,7 +755,7 @@ extension EavesdroppyDroplet: ShelfWidgetProviding {
                 layoutTraits: ShelfWidgetLayoutTraits(
                     preferredSoloWidth: 420,
                     preferredPairedWidth: 210,
-                    contentHeight: .fixed(recording ? 140 : 170)  // call details and buttons, or the jobs list
+                    contentHeight: .fixed(declaredHeight)  // from what it shows: see shelfWidgetHeight
                 ),
                 focusPolicy: .keyboardFocusable
             )
@@ -708,77 +763,102 @@ extension EavesdroppyDroplet: ShelfWidgetProviding {
     }
 
     public func makeWidgetView(_ id: ShelfWidgetID, context: ShelfWidgetContext) -> AnyView {
-        AnyView(EavesdroppyWidget(droplet: self, context: context))
+        AnyView(EavesdroppyWidget(droplet: self, library: library, context: context))
     }
 
     public func makeWidgetSettingsPopover(_ id: ShelfWidgetID) -> AnyView? { nil }
 }
 
+/// The audio problem, as one row. The button opens the privacy pane only for the missing call audio.
+struct WarningRow: View {
+    @ObservedObject var droplet: EavesdroppyDroplet
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: DroppySpacing.sm) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(StateColor.warning)
+            Text(compact && droplet.callAudioProblem ? "No call audio" : droplet.warnings.joined(separator: " "))
+                .font(.system(size: 11)).foregroundStyle(StateColor.warning).lineLimit(2)
+            Spacer(minLength: 0)
+            if droplet.callAudioProblem {
+                Button(compact ? "Settings" : "Open System Settings") { droplet.openScreenAudioSettings() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
+            }
+        }
+    }
+}
+
 private struct EavesdroppyWidget: View {
     @ObservedObject var droplet: EavesdroppyDroplet
+    @ObservedObject var library: LibraryModel
     let context: ShelfWidgetContext
 
     private var recording: Bool { droplet.session != nil }
+    private var working: Bool { !droplet.pending.isEmpty || droplet.starting }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
             header
-            if context.isCompact { compactBody } else { soloBody }
+            if let s = droplet.session { recordingBody(s) } else { idleBody }
             Spacer(minLength: 0)
         }
         .padding(context.contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // Droppy's shelf may claim the drag itself (its file tray); the Import row below always works.
+        // Droppy's shelf may claim the drag itself (its file tray); "Import recording…" in the menu always works.
         .dropDestination(for: URL.self) { urls, _ in droplet.importFiles(urls); return !urls.isEmpty }
     }
 
     private var header: some View {
         HStack(spacing: DroppySpacing.xsm) {
-            Image(systemName: recording ? "record.circle.fill" : (droplet.pending.isEmpty && !droplet.starting ? "waveform" : "hourglass"))
+            let glyph = recording ? "record.circle.fill" : (working ? "hourglass" : "waveform")
+            Image(systemName: glyph)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(recording ? Color.red : AdaptiveColors.notchSurfaceSecondaryText)
-            Text("Eavesdroppy")
-                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(recording ? StateColor.destructive : AdaptiveColors.notchSurfaceSecondaryText)
+                .id(glyph).transition(DroppyTransition.element)
+            Text("Eavesdroppy").font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 0)
             if recording {
-                Text(droplet.clock).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                Text(droplet.clock).font(.system(size: context.isCompact ? 13 : 12, weight: context.isCompact ? .medium : .semibold)).monospacedDigit()
                     .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
+                    .transition(DroppyTransition.element)
+            } else if !context.isCompact {
+                Button { droplet.openLibrary() } label: { Image(systemName: "books.vertical") }
+                    .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Open meetings")
             }
-            Button { droplet.openLibrary() } label: { Image(systemName: "books.vertical") }
-                .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Open meeting library")
+            overflow
         }
         .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
     }
 
-    private var compactBody: some View {
-        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            Text(droplet.session?.title ?? (droplet.starting ? "Starting…" : (droplet.pending.isEmpty ? "Ready" : "Processing \(droplet.pending.count)…")))
-                .font(.system(size: 13, weight: .medium)).lineLimit(1)
-                .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
-            primaryButton
-            if recording {
-                Button("Open notes") { droplet.showNotes() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
-            }
-        }
+    private var overflow: some View {
+        Menu {
+            Button("Open meetings") { droplet.openLibrary() }
+            Button("Import recording…") { droplet.chooseImport() }
+            Button("Open meetings folder") { droplet.openFolder() }
+        } label: { Image(systemName: "ellipsis") }
+            .menuStyle(.button).buttonStyle(DroppyCircleButtonStyle(size: 20)).fixedSize().accessibilityLabel("More")
     }
 
     @ViewBuilder private var primaryButton: some View {
         if recording {
-            Button("Stop & save") { droplet.stopRecording(process: true) }
-                .buttonStyle(DroppyAccentButtonStyle(color: .red, size: .small))
+            Button("Stop") { droplet.stopRecording(process: true) }
+                .buttonStyle(DroppyAccentButtonStyle(color: StateColor.destructive, size: .small))
                 .disabled(droplet.busy)
+                .transition(DroppyTransition.element)
         } else {
             Button("Record") { droplet.startRecording() }
                 .buttonStyle(DroppyAccentButtonStyle(size: .small))
                 .disabled(droplet.busy)
+                .transition(DroppyTransition.element)
         }
     }
 
-    private var soloBody: some View {
+    // MARK: idle
+
+    private var idleBody: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            if let s = droplet.session {
-                recordingBody(s)
+            if context.isCompact {
+                primaryButton
             } else {
                 HStack(spacing: DroppySpacing.sm) {
                     TextField("Meeting title", text: $droplet.titleDraft)
@@ -787,77 +867,65 @@ private struct EavesdroppyWidget: View {
                         .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
                         .onTapGesture { droplet.focusTitle() }
                         .onSubmit { droplet.startRecording() }
+                        .padding(.horizontal, DroppySpacing.smd).padding(.vertical, DroppySpacing.xsm)
+                        .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(AdaptiveColors.notchSurfaceCardFill))
                     primaryButton
                 }
-                if let p = droplet.permissionProblem {
-                    HStack(spacing: DroppySpacing.sm) {
-                        Text(p).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(1)
-                        Spacer(minLength: 0)
-                        Button("Open Settings") { droplet.openMicSettings() }
-                            .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                    }
+            }
+            if let p = droplet.permissionProblem {
+                HStack(spacing: DroppySpacing.sm) {
+                    Text(p).font(.system(size: 11)).foregroundStyle(StateColor.warning).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button(context.isCompact ? "Settings" : "Open System Settings") { droplet.openMicSettings() }
+                        .buttonStyle(DroppyQuietButtonStyle(size: .small))
                 }
-                jobsList
             }
+            rows
         }
     }
 
-    /// The call's details; the notes themselves are in the floating window ("Open notes").
-    private func recordingBody(_ s: (dir: URL, title: String, attendees: [String], start: Date)) -> some View {
-        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            Text(s.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
-            if !s.attendees.isEmpty {
-                Text("With " + s.attendees.joined(separator: ", ")).font(.system(size: 11)).lineLimit(1)
-                    .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
-            }
-            if !droplet.warnings.isEmpty {
-                Text(droplet.warnings.joined(separator: " ")).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2)
-            }
-            HStack(spacing: DroppySpacing.sm) {
-                Button("Open notes") { droplet.showNotes() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                Spacer(minLength: 0)
-                Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
-                    .disabled(droplet.busy)
-                primaryButton
-            }
-        }
-    }
-
-    private var jobsList: some View {
+    private var rows: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DroppySpacing.xs) {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(droplet.pending) { j in
-                    row("hourglass", "Processing: \(j.title)…")
+                    row("hourglass", "Writing notes · \(j.title)")
                 }
                 ForEach(droplet.failed) { f in
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: DroppySpacing.xsm) {
-                            row("exclamationmark.triangle", "Failed: \(f.title)")
+                            row("exclamationmark.triangle", "Couldn't process \(f.title)")
                             Button("Retry") { droplet.retry(f.dir) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
                             Button(droplet.confirmingDelete == f.dir ? "Confirm delete" : "Delete") { droplet.deleteFailed(f.dir) }
                                 .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDelete == f.dir))
+                                .frame(width: 96)  // the confirm label must not move its neighbours
                         }
                         if let why = f.reason {
-                            Text(why).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2).padding(.leading, 14 + DroppySpacing.xsm)
+                            Text(why).font(.system(size: 11)).foregroundStyle(StateColor.warning).lineLimit(2).padding(.leading, 14 + DroppySpacing.xsm)
                         }
                     }
                 }
-                ForEach(droplet.recent, id: \.self) { path in
-                    Button { droplet.openNotes(path) } label: {
-                        row("doc.text", (path as NSString).lastPathComponent)
-                    }
-                    .buttonStyle(.plain)
+                ForEach(library.recents) { m in
+                    Button { library.open(m.id); droplet.openLibrary() } label: { recentRow(m) }
+                        .buttonStyle(.plain)
                 }
-                Button { droplet.chooseImport() } label: { row("square.and.arrow.down", "Import recording…") }
-                    .buttonStyle(.plain)
-                Button { droplet.openFolder() } label: { row("folder", "Open meetings folder") }
-                    .buttonStyle(.plain)
             }
         }
         .droppyFlatGlassControls()
+    }
+
+    private func recentRow(_ m: MeetingSummary) -> some View {
+        HStack(spacing: DroppySpacing.xsm) {
+            Image(systemName: "doc.text").font(.system(size: 11)).frame(width: 14)
+            Text(m.title).font(.system(size: 12)).lineLimit(1)
+            Spacer(minLength: DroppySpacing.sm)
+            if !context.isCompact {
+                Text(m.openActions > 0 ? "\(m.openActions) action\(m.openActions == 1 ? "" : "s")" : Fmt.when(m.start))
+                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(AdaptiveColors.notchSurfaceTertiaryText).lineLimit(1)
+            }
+        }
+        .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+        .frame(height: 20)
+        .contentShape(Rectangle())
     }
 
     private func row(_ symbol: String, _ text: String) -> some View {
@@ -867,7 +935,38 @@ private struct EavesdroppyWidget: View {
             Spacer(minLength: 0)
         }
         .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+        .frame(height: 20)
         .contentShape(Rectangle())
+    }
+
+    // MARK: recording
+
+    /// The call's details; the notes themselves are in the floating window ("Open notes"). Solo and paired are the
+    /// same rows, so the shelf declares one height for both.
+    private func recordingBody(_ s: (dir: URL, title: String, attendees: [String], start: Date)) -> some View {
+        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+            Text(s.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
+            if !s.attendees.isEmpty {
+                Text("With " + s.attendees.joined(separator: ", ")).font(.system(size: 11)).lineLimit(1)
+                    .foregroundStyle(AdaptiveColors.notchSurfaceSecondaryText)
+            }
+            if !droplet.warnings.isEmpty {
+                WarningRow(droplet: droplet, compact: context.isCompact).transition(DroppyTransition.element)
+            }
+            HStack(spacing: DroppySpacing.sm) {
+                Button("Open notes") { droplet.showNotes() }
+                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
+                Spacer(minLength: 0)
+                if !context.isCompact {
+                    Button(droplet.confirmingDiscard ? "Confirm discard" : "Discard") { droplet.discard() }
+                        .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
+                        .frame(width: 104)  // the confirm label must not push Stop around
+                        .disabled(droplet.busy)
+                }
+                primaryButton
+            }
+        }
     }
 }
 

@@ -43,3 +43,37 @@ import Testing
         try #require(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: out))
     }
 }
+
+@Suite struct ClockAndHeightTests {
+    @Test func clockShowsHoursPastAnHour() {
+        #expect(clockText(0) == "0:00")
+        #expect(clockText(754) == "12:34")
+        #expect(clockText(3599) == "59:59")
+        #expect(clockText(3600) == "1:00:00")
+        #expect(clockText(4512) == "1:15:12")  // was "75:12"
+        #expect(clockText(-5) == "0:00")
+    }
+
+    @Test func widgetHeightGrowsWithRowsAndStaysUnderTheCap() {
+        let idle = shelfWidgetHeight(recording: false, attendees: false, warning: false, permissionProblem: false, rows: 0)
+        let three = shelfWidgetHeight(recording: false, attendees: false, warning: false, permissionProblem: false, rows: 3)
+        #expect(three > idle && three <= 170)
+        #expect(shelfWidgetHeight(recording: false, attendees: false, warning: false, permissionProblem: true, rows: 40) == 170)
+        let rec = shelfWidgetHeight(recording: true, attendees: false, warning: false, permissionProblem: false, rows: 9)
+        #expect(rec == shelfWidgetHeight(recording: true, attendees: false, warning: false, permissionProblem: false, rows: 0))  // jobs are not listed while recording
+        #expect(shelfWidgetHeight(recording: true, attendees: true, warning: true, permissionProblem: false, rows: 0) > rec)
+    }
+
+    @Test func whenIsRelativeAndLocaleAware() {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = Fmt.parseISO("2026-10-13T12:00:00Z")!
+        let us = Locale(identifier: "en_US"), gb = Locale(identifier: "en_GB")
+        #expect(Fmt.when("2026-10-13T09:30:00Z", now: now, calendar: cal, locale: us).hasPrefix("Today, 9:30"))
+        #expect(Fmt.when("2026-10-12T23:30:00Z", now: now, calendar: cal, locale: gb) == "Yesterday, 23:30")
+        #expect(Fmt.when("2026-10-09T09:30:00Z", now: now, calendar: cal, locale: gb).hasPrefix("Fri, "))  // three days back: the weekday
+        #expect(Fmt.when("2026-09-01T09:30:00Z", now: now, calendar: cal, locale: gb).hasPrefix("1 Sep"))   // older: the date, no year
+        #expect(!Fmt.when("2026-10-13T21:30:00Z", now: Fmt.parseISO("2026-10-13T23:00:00Z")!, calendar: cal, locale: gb).contains("PM"))
+        #expect(Fmt.when("2025-09-01T09:30:00Z", now: now, calendar: cal, locale: gb).contains("2025"))
+        #expect(Fmt.when("not a date") == "not a date")
+    }
+}

@@ -32,7 +32,7 @@ struct CLIProvider: NotesProvider {
 
     func availabilityDetail() async -> String {
         if let p = path { return p.replacingOccurrences(of: home, with: "~") }
-        return "Not found (looked in PATH, ~/.local/bin, ~/.grok/bin, /opt/homebrew/bin, /usr/local/bin)"
+        return ProviderSettingsModel.notFound
     }
 
     // MARK: Invocations (pure, so tests can pin them)

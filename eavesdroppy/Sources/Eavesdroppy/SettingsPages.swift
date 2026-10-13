@@ -5,7 +5,7 @@ import SwiftUI
 // native pop-up buttons and text fields, as the design guidelines ask of settings.
 
 private enum PageID {
-    static let recording = "recording", speakers = "speakers", notes = "notes", calendar = "calendar", output = "output", storage = "storage"
+    static let recording = "recording", speakers = "speakers", notes = "notes", providers = "providers", calendar = "calendar", output = "output", storage = "storage"
 }
 
 extension EavesdroppyDroplet: SettingsPagesProviding {
@@ -21,6 +21,7 @@ extension EavesdroppyDroplet: SettingsPagesProviding {
         case PageID.recording: return AnyView(RecordingPage(prefs: prefs))
         case PageID.speakers: return AnyView(SpeakersPage(droplet: self))
         case PageID.notes: return AnyView(NotesPage(prefs: prefs, providerSettings: providerSettings, mcp: mcp))
+        case PageID.providers: return AnyView(ProvidersPage(model: providerSettings))
         case PageID.calendar: return AnyView(CalendarPage(droplet: self))
         case PageID.output: return AnyView(OutputPage(prefs: prefs, linear: linear))
         case PageID.storage: return AnyView(StoragePage(droplet: self))
@@ -35,7 +36,7 @@ extension EavesdroppyDroplet: SettingsPagesProviding {
          SettingsSearchEntry(title: "Auto-stop", keywords: ["recording", "call ends"]),
          SettingsSearchEntry(title: "Offer to record when a call starts", keywords: ["microphone", "prompt", "zoom", "teams", "meet"]),
          SettingsSearchEntry(title: "Read participant names", keywords: ["accessibility", "zoom", "teams", "meet", "speakers"]),
-         SettingsSearchEntry(title: "Teach Eavesdroppy your voice", keywords: ["voiceprint", "enroll", "speakers"]),
+         SettingsSearchEntry(title: "Teach Eavesdroppy your voice", keywords: ["record your voice", "voiceprint", "enroll", "speakers"]),
          SettingsSearchEntry(title: "Default template", keywords: ["notes", "standup", "sales", "interview"]),
          SettingsSearchEntry(title: "AI provider", keywords: ["claude", "codex", "grok", "apple intelligence", "api key", "openai", "anthropic", "xai", "model"]),
          SettingsSearchEntry(title: "AI tools (MCP)", keywords: ["mcp", "claude code", "cursor", "server", "token", "localhost"]),
@@ -148,7 +149,7 @@ private struct SpeakersPage: View {
                     DropletControlRow(title: "Voice sample") {
                         HStack(spacing: DroppySpacing.sm) {
                             Text(enrolledText).foregroundStyle(.secondary)
-                            Button(library.me == nil ? "Teach Eavesdroppy your voice" : "Re-record") { start() }
+                            Button(library.me == nil ? "Record your voice" : "Re-record") { start() }
                                 .disabled(enrollment.active || droplet.recording || droplet.busy)
                         }
                     }
@@ -217,21 +218,40 @@ private struct NotesPage: View {
                     .labelsHidden().pickerStyle(.menu)
                 }
             }
-            DropletSettingsSection {
-                settingsSectionHeader("Custom template")
-            } content: {
-                DropletSettingsCard {
-                    DropletStackedRow(title: "Instructions", infoTip: "Used when a meeting's template is Custom. Say what sections you want and how to write them.") {
-                        TextEditor(text: Binding(get: { prefs.customTemplate },
-                                                 set: { prefs.set(Prefs.Key.customTemplate, $0); prefs.writeCustomTemplateFile() }))
-                            .font(.body).frame(minHeight: 110)
+            if prefs.defaultTemplate == "custom" {  // nothing to edit until Custom is the template
+                DropletSettingsSection {
+                    settingsSectionHeader("Custom template")
+                } content: {
+                    DropletSettingsCard {
+                        DropletStackedRow(title: "Instructions", infoTip: "Used when a meeting's template is Custom. Say what sections you want and how to write them.") {
+                            TextEditor(text: Binding(get: { prefs.customTemplate },
+                                                     set: { prefs.set(Prefs.Key.customTemplate, $0); prefs.writeCustomTemplateFile() }))
+                                .font(.body).frame(minHeight: 110)
+                        }
+                        if prefs.customTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            DropletControlRow(title: "Start from an example") {
+                                Button("Insert example") { prefs.set(Prefs.Key.customTemplate, Self.starter); prefs.writeCustomTemplateFile() }
+                            }
+                        }
                     }
                 }
             }
-            ProviderSettingsSection(model: providerSettings)
+            ProviderSummarySection(model: providerSettings)
             MCPSettingsSection(model: mcp)
         }
     }
+}
+
+private extension NotesPage {
+    static let starter = """
+        Sections: Summary, Decisions, Action items, Open questions.
+        Write the summary in three sentences at most. List each decision on its own line. Give every action item an owner and a due date when the meeting names one.
+        """
+}
+
+private struct ProvidersPage: View {
+    @ObservedObject var model: ProviderSettingsModel
+    var body: some View { DropletSettingsPage { ProviderSettingsSection(model: model) } }
 }
 
 // MARK: - Calendar
@@ -249,14 +269,15 @@ private struct CalendarPage: View {
                                  subtitle: "A notch prompt a minute before a meeting with a video link or attendees, with Record ready. Turning it on asks Droppy for Calendar access.",
                                  isOn: Binding(get: { prefs.calendarPrompt },
                                                set: { prefs.set(Prefs.Key.calendarPrompt, $0); if $0 { automation.connectCalendar() } }))
-                DropletControlRow(title: automation.message ?? accessText) {
+                DropletControlRow(title: "Calendar access") {
                     switch automation.calendarStatus {
-                    case .granted: EmptyView()
+                    case .granted: DropletValuePill(text: "Connected")
                     case .denied: Button("Open System Settings") { automation.openCalendarSettings() }
                     case .notDetermined: Button("Connect calendar") { automation.connectCalendar() }
-                    default: EmptyView()
+                    default: DropletValuePill(text: "Unavailable")
                     }
                 }
+                if let m = automation.message { DropletControlRow(title: m) { EmptyView() } }
                 DropletToggleRow(title: "Start recording automatically",
                                  subtitle: "Starts when the event begins, without asking. The notch reminds everyone they're being recorded.",
                                  isOn: prefs.binding(Prefs.Key.calendarAutoStart, false))
@@ -264,15 +285,6 @@ private struct CalendarPage: View {
             }
         }
         .onAppear { automation.refreshPermissions() }
-    }
-
-    private var accessText: String {
-        switch automation.calendarStatus {
-        case .granted: return "Calendar connected"
-        case .denied: return "Calendar access is off for Droppy"
-        case .notDetermined: return "Calendar not connected"
-        default: return "This Droppy build can't read calendars"
-        }
     }
 }
 

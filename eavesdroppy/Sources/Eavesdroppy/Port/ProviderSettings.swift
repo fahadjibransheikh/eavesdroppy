@@ -30,6 +30,17 @@ struct ProviderPrefs {
     private var store: ProviderPrefs?
     private let queue = DispatchQueue(label: "eavesdroppy.providers", qos: .userInitiated)
 
+    /// The detail of a CLI that was not found; the searched folders are in the row's info tip, not the row.
+    nonisolated static let notFound = "Not found"
+    nonisolated static let searched = "Looked in PATH, ~/.local/bin, ~/.grok/bin, /opt/homebrew/bin and /usr/local/bin."
+
+    /// One line for the Notes page: what writes the notes right now.
+    var summary: String {
+        if config.choice != "auto" { return Self.name(config.choice) }
+        if let first = rows.first(where: { $0.available == true }) { return "Automatic (using \(first.name))" }
+        return rows.allSatisfy({ $0.available != nil }) ? "Automatic (nothing found)" : "Automatic"
+    }
+
     nonisolated static func name(_ id: String) -> String {
         switch id {
         case "claude-code": return "Claude Code"
@@ -90,7 +101,27 @@ struct ProviderPrefs {
     var hasKey: Bool { rows.first { $0.id == "api" }?.available == true }
 }
 
-/// A section for the Notes page: the picker, what was found, and the API-key fields.
+/// The Notes page's one-line summary and the link to the Providers page (`ProviderSettingsSection`).
+struct ProviderSummarySection: View {
+    @ObservedObject var model: ProviderSettingsModel
+
+    var body: some View {
+        DropletSettingsSection {
+            settingsSectionHeader("AI provider")
+        } content: {
+            DropletSettingsCard {
+                DropletControlRow(title: "Write notes with") { Text(verbatim: model.summary).foregroundStyle(.secondary).lineLimit(1) }
+                DropletSettingsPageLink("Providers", subtitle: "What was found, and an API key", page: "providers") {
+                    RoundedRectangle(cornerRadius: DroppyRadius.sm, style: .continuous).fill(Color.purple)
+                        .overlay(Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white))
+                }
+            }
+        }
+        .onAppear { model.refresh() }
+    }
+}
+
+/// The Providers page: the picker, what was found, and the API-key fields.
 struct ProviderSettingsSection: View {
     @ObservedObject var model: ProviderSettingsModel
     @State private var keyDraft = ""
@@ -109,7 +140,7 @@ struct ProviderSettingsSection: View {
                     .labelsHidden().pickerStyle(.menu)
                 }
                 ForEach(model.rows) { row in
-                    DropletControlRow(title: row.name) {
+                    DropletControlRow(title: row.name, infoTip: row.detail == ProviderSettingsModel.notFound ? ProviderSettingsModel.searched : nil) {
                         HStack(spacing: DroppySpacing.xs) {
                             Image(systemName: row.available == true ? "checkmark.circle.fill" : "circle.dashed")
                                 .foregroundStyle(row.available == true ? Color.green : Color.secondary)

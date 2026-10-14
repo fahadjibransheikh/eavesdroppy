@@ -54,7 +54,7 @@ enum NativeCommands {
         "process": .init(positionals: [("session_dir", false)]),
         "regenerate": .init(positionals: [("id", true)], options: [("--template", false), ("--custom-text-file", false)]),
         "ask": .init(positionals: [("question", false)], options: [("--meeting-id", true), ("--person-id", true)]),
-        "enroll": .init(positionals: [("wav", false)], options: [("--name", false)]),
+        "enroll": .init(positionals: [("wav", false)], options: [("--name", false)], flags: ["--force"]),
         "import-drive": .init(),
         "linear-teams": .init(),
         "linear-export": .init(positionals: [("action_id", true)], options: [("--team", false)]),
@@ -90,7 +90,7 @@ enum NativeCommands {
                 result = try await ask(a.pos[0], meetingID: a.opt["--meeting-id"].flatMap { Int($0) }, personID: a.opt["--person-id"].flatMap { Int($0) },
                                        userName: userName, container: container, ctx)
             case "enroll":
-                result = try await enroll(wav: a.pos[0], name: a.opt["--name"] ?? "Me", container: container, ctx)
+                result = try await enroll(wav: a.pos[0], name: a.opt["--name"] ?? "Me", force: a.flag.contains("--force"), container: container, ctx)
             case "import-drive":
                 let db = try StoreDB(path: container.appendingPathComponent("library.db")); defer { db.close() }
                 let r = try StoreImport.importExisting(db, outRoot: out)
@@ -144,30 +144,41 @@ enum NativeCommands {
         } catch { throw StoreError((error as? LocalizedError)?.errorDescription ?? "\(error)") }
     }
 
-    static func enroll(wav: String, name: String, container: URL, _ ctx: Context) async throws -> [String: Any] {
+    /// Learns the user's voiceprint from a sample, after EnrollQuality has accepted it (nothing is saved otherwise). When the user already
+    /// has a print and the new one matches it below `Voiceprints.meThr`, nothing is saved either and the result is
+    /// `{"confirm": true, "match": cosine}`; the caller asks and re-runs with `--force` (replace, n = 1). The sample stays where it is.
+    static func enroll(wav: String, name: String, force: Bool = false, container: URL, _ ctx: Context) async throws -> [String: Any] {
         let diarizer = ctx.engines.diarizer()
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("eavesdroppy-enroll-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let r: EngineDiarization
+        let r: EngineDiarization, x: [Float], native: EnrollQuality.Native
         do {   // any rate/channels -> 16 kHz mono 16-bit (soundfile's default WAV subtype)
-            let x = try Echo.load16k(URL(fileURLWithPath: wav))
+            x = try Echo.load16k(URL(fileURLWithPath: wav))
+            native = try EnrollQuality.nativeStats(URL(fileURLWithPath: wav))
             let p = tmp.appendingPathComponent("enroll.wav")
             try ProcessorAudio.writeMono16(x, rate: 16_000, to: p)
             r = try await diarizer.diarize(p)
             await diarizer.unload()
         } catch is CancellationError { await diarizer.unload(); throw CancellationError()
         } catch { await diarizer.unload(); throw StoreError((error as? LocalizedError)?.errorDescription ?? "\(error)") }
-        var order: [String] = [], secs: [String: Double] = [:]
-        for s in r.segments { if secs[s.cluster] == nil { order.append(s.cluster) }; secs[s.cluster, default: 0] += max(0, s.end - s.start) }
-        guard var cid = order.first else { throw StoreError("enrollment sample has no detectable speech") }
-        for c in order where secs[c]! > secs[cid]! { cid = c }   // max(): first of equals
-        guard secs[cid]! >= Voiceprints.minEnrollSpeech else {
-            throw StoreError("enrollment sample has only \(String(format: "%.1f", secs[cid]!)) s of speech; need \(String(format: "%.0f", Voiceprints.minEnrollSpeech)) s")
-        }
-        guard let emb = r.embeddings[cid] else { throw StoreError("enrollment sample has no voiceprint") }
-        let seconds = PyRound.round(secs[cid]!, 1)
+        let m = EnrollQuality.measure(samples: x, segments: r.segments, native: native)
+        log("enroll: sample \(URL(fileURLWithPath: wav).lastPathComponent), \(Int(native.rate)) Hz, \(native.channels) channel(s); \(EnrollQuality.summary(m))")
+        if let why = EnrollQuality.rejection(m, minSpeech: Voiceprints.minEnrollSpeech) { log("enroll refused: \(why)"); throw StoreError(why) }
+        guard let cid = m.dominant, let emb = r.embeddings[cid] else { throw StoreError("enrollment sample has no voiceprint") }
+        let seconds = PyRound.round(m.speech, 1)
         let db = try StoreDB(path: container.appendingPathComponent("library.db")); defer { db.close() }
+        let cos = { (a: [Float], b: [Float]) -> Double? in a.count == b.count ? Double(Voiceprints.dot(Voiceprints.unit(a), Voiceprints.unit(b))) : nil }
+        let saved = try db.rows("SELECT voiceprint FROM people WHERE is_me = 1 AND voiceprint IS NOT NULL ORDER BY id LIMIT 1").first?.data(0).flatMap { try? StoreVoiceprint.vec($0) }
+        let oldMatch = saved.flatMap { cos($0, emb) }
+        // the best cosine to any meeting cluster that was named Me by voiceprint
+        let meetingMatch = try db.rows("SELECT embedding FROM speakers WHERE kind = 'me' AND embedding IS NOT NULL")
+            .compactMap { $0.data(0).flatMap { try? StoreVoiceprint.vec($0) }.flatMap { cos($0, emb) } }.max()
+        log("enroll: match to saved voice \(oldMatch.map { String(format: "%.3f", $0) } ?? "none"), best match to a meeting cluster named Me \(meetingMatch.map { String(format: "%.3f", $0) } ?? "none")")
+        var result: [String: Any] = ["seconds": seconds, "quality": m.json]
+        if let meetingMatch { result["meeting_match"] = PyRound.round(meetingMatch, 3) }
+        if let oldMatch { result["old_match"] = PyRound.round(oldMatch, 3) }
+        if !force, let oldMatch, oldMatch < Voiceprints.meThr { result["confirm"] = true; return result }
         let pid: Int
         if let row = try db.rows("SELECT id FROM people WHERE is_me = 1 ORDER BY id LIMIT 1").first?.int(0) {
             try db.tx { try db.run("UPDATE people SET name = ?, voiceprint = ?, n = 1, updated = ? WHERE id = ?", [name, StoreVoiceprint.blob(emb), StoreClock.now(), row]) }
@@ -175,8 +186,8 @@ enum NativeCommands {
         } else {
             pid = try db.tx { try StoreVoiceprint.addPerson(db, name: name, embedding: emb, isMe: true) }
         }
-        if PyPath.under(wav, [container.path + "/enroll"]) { try? FileManager.default.removeItem(atPath: wav) }   // the droplet's own recording; never a file the user pointed us at
-        return ["person_id": pid, "seconds": seconds]
+        result["person_id"] = pid
+        return result
     }
 
     /// linear_description

@@ -123,26 +123,59 @@ private func db(_ s: Scratch) throws -> StoreDB { try StoreDB(path: s.container.
 
     // MARK: enroll
 
-    struct LongSpeech: Diarizer {
-        var seconds = 12.0
+    /// Clusters S1 and S2 with the given seconds of speech; S1's embedding is `unit(hot)` so two diarizers can disagree about the voice.
+    struct Voices: Diarizer {
+        var s1 = 12.0, s2 = 2.0, hot = 255
         func diarize(_ audio: URL) async throws -> EngineDiarization {
-            EngineDiarization(segments: [EngineSegment(start: 0, end: seconds, cluster: "S1"), EngineSegment(start: seconds, end: seconds + 2, cluster: "S2")],
-                              embeddings: ["S1": [Float](repeating: 0, count: 255) + [1], "S2": [1] + [Float](repeating: 0, count: 255)])
+            var segs = [EngineSegment(start: 0, end: s1, cluster: "S1")]
+            if s2 > 0 { segs.append(EngineSegment(start: s1, end: s1 + s2, cluster: "S2")) }
+            var a = [Float](repeating: 0, count: 256); a[hot] = 1
+            var b = [Float](repeating: 0, count: 256); b[(hot + 1) % 256] = 1
+            return EngineDiarization(segments: segs, embeddings: ["S1": a, "S2": b])
         }
         func unload() async {}
     }
+    struct Silent: Diarizer { func diarize(_ a: URL) async throws -> EngineDiarization { .empty }; func unload() async {} }
+
+    /// 25 s at 48 kHz that reads as speech to EnrollQuality: harmonics at `speechDB` in 0.6 s bursts every 0.9 s over noise at `noiseDB`.
+    /// `overdrive` multiplies the speech before it is clamped to +-1.
+    static func voice(to url: URL, speechDB: Double = -25, noiseDB: Double = -60, overdrive: Float = 1) throws {
+        var seed: UInt64 = 7
+        let a = Float(pow(10, speechDB / 20) / 2.5.squareRoot()), n = Float(pow(10, noiseDB / 20) * 3.0.squareRoot())
+        let x: [Float] = (0..<(48_000 * 25)).map { i in
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            let noise = (Float(seed >> 40) / Float(1 << 24) * 2 - 1) * n, t = Double(i) / 48_000
+            let on = t.truncatingRemainder(dividingBy: 0.9) < 0.6
+            let speech = on ? (1...5).reduce(Float(0)) { $0 + a * Float(sin(2 * Double.pi * 150 * Double($1) * t)) } : 0
+            return max(-1, min(1, speech * overdrive + noise))
+        }
+        try ProcessorAudio.writeMonoFloat(x, rate: 48_000, to: url)
+    }
+
+    private func sample(_ s: Scratch, speechDB: Double = -25, noiseDB: Double = -60, overdrive: Float = 1, name: String = "enroll/sample.wav") throws -> URL {
+        let wav = s.container.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: wav.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.voice(to: wav, speechDB: speechDB, noiseDB: noiseDB, overdrive: overdrive)
+        return wav
+    }
+
+    private func refused(_ s: Scratch, _ wav: URL, _ d: any Diarizer) async -> String? {
+        do { _ = try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: d)); return nil } catch { return "\(error)" }
+    }
+
+    private func people(_ s: Scratch) throws -> Int { let d = try db(s); defer { d.close() }; return try d.rows("SELECT id FROM people").count }
 
     @Test func enrollStoresTheDominantClusterAsMeAndUpdatesInPlace() async throws {
         let s = try Scratch(); defer { s.remove() }
-        let wav = s.container.appendingPathComponent("enroll/sample.wav")
-        try FileManager.default.createDirectory(at: wav.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Scratch.tone(300, to: wav)
-        let out = try json(try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: LongSpeech())))
+        let wav = try sample(s)
+        let out = try json(try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: Voices())))
         #expect(out["seconds"] as? Double == 12.0)
-        #expect(!FileManager.default.fileExists(atPath: wav.path), "the droplet's own recording is deleted")
+        #expect((out["quality"] as? [String: Any])?["clusters"] as? Int == 2)
+        #expect(out["confirm"] == nil)
+        #expect(FileManager.default.fileExists(atPath: wav.path), "the sample is kept for diagnosis")
         let elsewhere = s.root.appendingPathComponent("mine.wav")
-        try Scratch.tone(300, to: elsewhere)
-        let again = try json(try await NativeCommands.run(["enroll", elsewhere.path, "--name", "Fahad S"], ctx(s, diarizer: LongSpeech(seconds: 15))))
+        try Self.voice(to: elsewhere)
+        let again = try json(try await NativeCommands.run(["enroll", elsewhere.path, "--name", "Fahad S"], ctx(s, diarizer: Voices(s1: 15))))
         #expect(again["person_id"] as? Int == out["person_id"] as? Int, "the Me row is updated, not duplicated")
         #expect(FileManager.default.fileExists(atPath: elsewhere.path), "a file the user pointed us at is never deleted")
         let d = try db(s); defer { d.close() }
@@ -152,14 +185,65 @@ private func db(_ s: Scratch) throws -> StoreDB { try StoreDB(path: s.container.
 
     @Test func enrollRefusesTooLittleSpeech() async throws {
         let s = try Scratch(); defer { s.remove() }
-        let wav = s.root.appendingPathComponent("short.wav")
-        try Scratch.tone(300, to: wav)
-        do { _ = try await NativeCommands.run(["enroll", wav.path], ctx(s, diarizer: LongSpeech(seconds: 4))); Issue.record("expected a failure") }
-        catch { #expect("\(error)" == "enrollment sample has only 4.0 s of speech; need 10 s") }
+        let wav = try sample(s, name: "short.wav")
+        #expect(await refused(s, wav, Voices(s1: 4, s2: 0)) == "Only 4.0 seconds of speech were picked up, and at least 10 are needed. Read the passage steadily and closer to the microphone.")
         #expect(FileManager.default.fileExists(atPath: wav.path), "the sample stays so the user can retry")
-        struct Silent: Diarizer { func diarize(_ a: URL) async throws -> EngineDiarization { .empty }; func unload() async {} }
-        do { _ = try await NativeCommands.run(["enroll", wav.path], ctx(s, diarizer: Silent())); Issue.record("expected a failure") }
-        catch { #expect("\(error)" == "enrollment sample has no detectable speech") }
+        #expect(await refused(s, wav, Silent()) == "No speech was picked up. Check that the right microphone is selected, then try again.")
+        #expect(try people(s) == 0)
+    }
+
+    @Test func enrollRefusesAnotherVoice() async throws {
+        let s = try Scratch(); defer { s.remove() }
+        let wav = try sample(s)
+        #expect(await refused(s, wav, Voices(s1: 14, s2: 6)) == "Another voice was picked up (30% of the speech). Record where only you are talking.")
+        #expect(await refused(s, wav, Voices(s1: 16, s2: 4)) == nil, "exactly 20 % is allowed")
+    }
+
+    @Test func enrollRefusesTooQuietTooLoudAndNoisySamples() async throws {
+        let s = try Scratch(); defer { s.remove() }
+        let quiet = try sample(s, speechDB: -55, noiseDB: -80, name: "quiet.wav")
+        #expect(try await refused(s, quiet, Voices(s2: 0))?.hasPrefix("Too quiet: your voice was recorded at -") == true)
+        let loud = try sample(s, speechDB: -12, overdrive: 8, name: "loud.wav")
+        #expect(try await refused(s, loud, Voices(s2: 0))?.hasPrefix("Too loud: ") == true)
+        let noisy = try sample(s, speechDB: -25, noiseDB: -12, name: "noisy.wav")
+        #expect(await refused(s, noisy, Voices(s2: 0)) == "Too much background noise. Move somewhere quieter, or closer to the microphone, and try again.")
+        #expect(try people(s) == 0, "nothing is saved for a refused sample")
+        let good = try sample(s, name: "good.wav")
+        #expect(await refused(s, good, Voices(s2: 0)) == nil)
+        #expect(try people(s) == 1)
+    }
+
+    @Test func enrollAsksBeforeReplacingAVoiceThatSoundsDifferent() async throws {
+        let s = try Scratch(); defer { s.remove() }
+        let wav = try sample(s)
+        _ = try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: Voices(hot: 255)))
+        let same = try json(try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: Voices(hot: 255))))
+        #expect(same["confirm"] == nil); #expect(same["old_match"] as? Double == 1.0)
+        let diff = try json(try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad"], ctx(s, diarizer: Voices(hot: 7))))
+        #expect(diff["confirm"] as? Bool == true); #expect(diff["old_match"] as? Double == 0.0); #expect(diff["person_id"] == nil)
+        func print255() throws -> Bool {   // is the stored print still the first one?
+            let d = try db(s); defer { d.close() }
+            let v = try StoreVoiceprint.vec(try d.rows("SELECT voiceprint FROM people").first!.data(0)!)
+            return v[255] == 1
+        }
+        #expect(try print255(), "nothing was replaced before the user said yes")
+        let forced = try json(try await NativeCommands.run(["enroll", wav.path, "--name", "Fahad", "--force"], ctx(s, diarizer: Voices(hot: 7))))
+        #expect(forced["confirm"] == nil); #expect(forced["person_id"] != nil)
+        #expect(try !print255()); #expect(try people(s) == 1)
+    }
+
+    @Test func enrollReportsTheBestMatchToAMeetingClusterNamedMeByVoiceprint() async throws {
+        let s = try Scratch(); defer { s.remove() }
+        _ = try await processed(s)
+        var v = [Float](repeating: 0, count: 256); v[255] = 1
+        do {
+            let d = try db(s); defer { d.close() }
+            try d.tx { try d.run("UPDATE speakers SET kind = 'me', embedding = ? WHERE id = (SELECT MIN(id) FROM speakers)", [StoreVoiceprint.blob(v)]) }
+        }
+        let out = try json(try await NativeCommands.run(["enroll", try sample(s).path, "--name", "Fahad"], ctx(s, diarizer: Voices(s2: 0))))
+        #expect(out["meeting_match"] as? Double == 1.0)
+        let none = try Scratch(); defer { none.remove() }
+        #expect(try json(try await NativeCommands.run(["enroll", try sample(none).path], ctx(none, diarizer: Voices(s2: 0))))["meeting_match"] == nil)
     }
 
     // MARK: Linear

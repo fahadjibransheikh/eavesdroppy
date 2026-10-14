@@ -170,6 +170,7 @@ private struct SpeakersPage: View {
                         }
                     }
                     if enrollment.state != .idle { progress }
+                    Text("The last sample is kept on this Mac so problems can be checked.").font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }
@@ -198,7 +199,15 @@ private struct SpeakersPage: View {
                         Button("Cancel") { enrollment.cancel() }
                     }
                 case .processing: HStack { ProgressView().controlSize(.small); Text("Learning your voice…").foregroundStyle(.secondary) }
-                case .done(let s): Text("Done: \(String(format: "%.0f", s)) seconds of speech used.").foregroundStyle(.secondary)
+                case .done(let s, let past):
+                    Text("Done: \(String(format: "%.0f", s)) seconds of speech used." + (past.map { " It matches you in past meetings at \(Self.percent($0))." } ?? ""))
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                case .confirm(let m):
+                    Text("This sounds different from your saved voice (match \(Self.percent(m))). Save anyway?").fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: DroppySpacing.sm) {
+                        Button("Save") { enrollment.saveAnyway() }
+                        Button("Cancel") { enrollment.keepSaved() }
+                    }
                 case .failed(let why): Text(why).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 case .idle: EmptyView()
                 }
@@ -206,11 +215,14 @@ private struct SpeakersPage: View {
         }
     }
 
+    private static func percent(_ cosine: Double) -> String { "\(max(0, Int((cosine * 100).rounded())))%" }
+
     private var stateTitle: String {
         switch enrollment.state {
         case .recording: return "Read this aloud"
         case .processing: return "Processing"
         case .done: return "Voice saved"
+        case .confirm: return "Replace your saved voice?"
         case .failed: return "Couldn't save your voice"
         case .idle: return ""
         }

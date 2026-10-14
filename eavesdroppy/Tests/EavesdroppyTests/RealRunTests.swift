@@ -10,6 +10,7 @@ import Testing
 //       <container>/sessions) is processed in place into the real library and folder, with the user's notes provider (as the droplet does)
 //   EAVESDROPPY_REAL_CMD="delete 2" + the two above   one StoreCommands subcommand on the real library (delete, rename-meeting ...)
 //   EAVESDROPPY_EMBED_WAVS=a.wav,b.wav EAVESDROPPY_EMBED_OUT=<json>     speaker embedding of each wav by the enrollment path and by the meeting path
+//   EAVESDROPPY_ENROLL_WAVS=a.wav,b.wav                                  EnrollQuality metrics and verdict of each wav, with the real diarizer (the enrollment check's calibration)
 //   EAVESDROPPY_DETECT_WAVS=a.wav,b.wav                                  language-detection score of each 16 kHz mono wav
 //   EAVESDROPPY_CANCEL_WAV=<16 kHz mono wav, 1+ min>                    cancels Apple's transcription after 1 s and times how long it takes to stop
 //   EAVESDROPPY_COMPARE_WAV=<16 kHz mono wav> EAVESDROPPY_COMPARE_OUT=<dir>   words of mul_IN, en_US (and Parakeet) as text files
@@ -90,6 +91,22 @@ private let env = ProcessInfo.processInfo.environment
             print("REAL embed \(name): enroll \(ea?.secs ?? 0) s, meeting \(eb?.secs ?? 0) s")
         }
         try JSONSerialization.data(withJSONObject: result).write(to: URL(fileURLWithPath: out))
+    }
+
+    /// What `enroll` would decide for each wav (any rate), without touching a library.
+    @Test func measureEnrollWavs() async throws {
+        guard let list = env["EAVESDROPPY_ENROLL_WAVS"] else { return }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("enrollq-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let d = Engine.diarizer()
+        for path in list.split(separator: ",").map(String.init) {
+            let url = URL(fileURLWithPath: path), x = try Echo.load16k(url), p = tmp.appendingPathComponent("e.wav")
+            try ProcessorAudio.writeMono16(x, rate: 16_000, to: p)
+            let m = EnrollQuality.measure(samples: x, segments: try await d.diarize(p).segments, native: try EnrollQuality.nativeStats(url))
+            print("REAL enroll \(url.deletingPathExtension().lastPathComponent): \(EnrollQuality.rejection(m, minSpeech: Voiceprints.minEnrollSpeech).map { "REJECT " + $0 } ?? "ok") | \(EnrollQuality.summary(m))")
+        }
+        await d.unload()
     }
 
     @Test func scoreLanguageDetectionOfWavs() async throws {

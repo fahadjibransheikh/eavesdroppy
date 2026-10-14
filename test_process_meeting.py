@@ -1,5 +1,5 @@
 from datetime import datetime
-import contextlib, io, json, os, struct, subprocess, sys, tempfile, time
+import contextlib, io, json, os, shutil, struct, subprocess, sys, tempfile, time
 from pathlib import Path
 import numpy as np, soundfile as sf
 import process_meeting as pm
@@ -645,6 +645,41 @@ with Env() as E:
     # imports and mic-only recordings never touch the echo stage
     fk.echo_calls.clear(); pm.echo.detect_bleed = fk.detect_bleed
     ses = make_session(E.container, "e7", {}, **{"mic.wav": 1.0}); ok(str(ses)); assert fk.echo_calls == []
+
+# ---------- in person (meta setting): no echo stage, no assumed Me, no silent-call warning, a Setting line in the header ----------
+with Env() as E:
+    fk = E.fk
+    meta = {"track_offsets": {"mic": 0.0, "system": 2.0}, "setting": "in_person"}
+    fk.bleed = True  # the detector would flag bleed; it must not even be asked
+    ses = make_session(E.container, "ip1", meta, **{"mic.wav": 1.0})
+    sf.write(ses / "system.wav", np.zeros((48000, 2), dtype="float32"), 48000, subtype="FLOAT")  # nothing played through the Mac
+    r, se = ok(str(ses)); m = E.meeting(r)
+    assert fk.echo_calls == [] and m["bleed"] == 0 and r["warnings"] == [], (fk.echo_calls, r)
+    assert any(l.startswith("Echo: skipped") for l in se), se
+    by = {(s["track"], s["cluster"]): s for s in m["speakers"]}
+    assert by[("mic", "S1")]["label"] == "Speaker 1" and by[("mic", "S1")]["kind"] == "new", by  # not "Me" by assumption
+    assert all(s["kind"] != "assumed" and s["label"] != "Me" for s in m["speakers"]), by
+    head = (Path(r["folder"]) / "notes.md").read_text().split("\n\n")[1]
+    assert head.splitlines()[-1] == "- **Setting:** In person", head
+    assert "- **Setting:** In person" in (Path(r["folder"]) / "transcript.md").read_text().split("---")[0]
+    # a rename re-renders the mirror: the line survives, also once the raw archive is gone (audio expired)
+    shutil.rmtree(m["raw_dir"]); db = E.db(); db.execute("UPDATE meetings SET raw_dir = NULL WHERE id = ?", (m["id"],)); db.commit()
+    library.sync_mirror(db, m["id"], E.out_root); db.close()
+    assert "- **Setting:** In person" in (Path(r["folder"]) / "notes.md").read_text().split("\n\n")[1]
+
+    # a call (with the apps seen) keeps the old behaviour: echo checked, mic dominant = Me, the apps in the header
+    fk.reset()
+    r, se = ok(str(make_session(E.container, "ip2", {"track_offsets": {"mic": 0.0, "system": 2.0}, "setting": "call", "call_apps": ["Zoom", "Chrome"]},
+                                **{"mic.wav": 1.0, "system.wav": 1.0}))); m = E.meeting(r)
+    assert fk.echo_calls == [("detect", 2.0)], fk.echo_calls
+    by = {(s["track"], s["cluster"]): s for s in m["speakers"]}
+    assert by[("mic", "S1")]["label"] == "Me" and by[("mic", "S1")]["kind"] == "assumed", by
+    assert "- **Setting:** Call (Zoom, Chrome)" in (Path(r["folder"]) / "notes.md").read_text().split("\n\n")[1]
+    # a recording made before the field existed has no Setting line
+    r, se = ok(str(make_session(E.container, "ip3", {}, **{"mic.wav": 1.0}))); m = E.meeting(r)
+    assert "Setting" not in (Path(r["folder"]) / "notes.md").read_text().split("\n\n")[1] and "Setting" not in library.meeting_header(m)
+    # unknown or missing values render nothing
+    assert library.setting_text({"setting": "call"}) == "Call" and library.setting_text({"setting": "x"}) is None and library.setting_text({}) is None
 
 # ---------- retention applies after processing, inside the safety roots ----------
 with Env() as E:

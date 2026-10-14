@@ -92,9 +92,11 @@ enum Voiceprints {
     /// (matched the enrolled Me print), "assumed" (record without enrollment: dominant mic cluster), "auto" /
     /// "suggest" / "new" as in `match`. Only "new" and "suggest" clusters are numbered "Speaker n".
     /// Prints learn (when `update`) from `learnable` only; pass update: false when re-running a meeting.
+    /// `inPerson`: everyone in the room is on the mic track, so without an enrolled Me print the dominant mic cluster is
+    /// just another voice ("Speaker n"), not "Me".
     /// Divergence: a Me print of another length scores as no match (numpy would raise on the dot product).
     static func assignSpeakers(_ tracks: [String: Diarization], people: inout [Person], source: String, bleed: Bool,
-                               update: Bool = true) -> [Rec] {
+                               update: Bool = true, inPerson: Bool = false) -> [Rec] {
         var recs: [Rec] = []
         for track in ["mic", "system"] {
             guard let t = tracks[track] else { continue }
@@ -122,7 +124,7 @@ enum Voiceprints {
                 recs[i].label = me.name; recs[i].personID = me.id; recs[i].score = PyRound.round(meScore[i], 4)
                 recs[i].kind = .me; labeled[i] = true
             }
-        } else if source == "record" && !mic.isEmpty {
+        } else if source == "record" && !inPerson && !mic.isEmpty {
             var best = mic[0]
             for i in mic where recs[i].speechS > recs[best].speechS { best = i }
             recs[best].label = "Me"; recs[best].kind = .assumed; labeled[best] = true

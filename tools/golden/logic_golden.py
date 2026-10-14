@@ -303,16 +303,16 @@ def voiceprint_fixture():
     # ---- assign_speakers scenarios
     scen = []
 
-    def scenario(name, tracks, people_spec, source, bleed, update):
+    def scenario(name, tracks, people_spec, source, bleed, update, in_person=False):
         c = new_db()
         for sp in people_spec:
             speakers.add_person(c, sp["name"], sp.get("emb"), email=sp.get("email"), is_me=sp.get("is_me", False))
         people0 = db_people(c)
-        recs = speakers.assign_speakers(tracks, c, [], source, bleed, update=update)
+        recs = speakers.assign_speakers(tracks, c, [], source, bleed, update=update, in_person=in_person)
         scen.append({"name": name, "tracks": [[k, diar_json(v)] for k, v in tracks.items()], "people": people0,
                      "source": source, "bleed": bleed, "update": update, "recs": [rec_json(r) for r in recs],
                      "learnable": [[p, vec(e)] for p, e in speakers.learnable(recs, bleed)],
-                     "people_after": db_people(c)})
+                     "people_after": db_people(c), **({"in_person": True} if in_person else {})})  # key only when set: older cases stay as they were
 
     rng = random.Random(11)
     kinds = set()
@@ -361,6 +361,10 @@ def voiceprint_fixture():
              [], "record", False, True)
     scenario("assumed tie: first cluster", {"mic": {"segments": [(0, 5, "S1"), (6, 11, "S2")], "embeddings": {"S2": other, "S1": mic_me}}},
              [], "record", False, True)
+    scenario("in person without Me: dominant mic cluster is a plain speaker", {"mic": {"segments": [(0, 2, "S1"), (3, 20, "S2")], "embeddings": {"S1": mic_me, "S2": other}}},
+             [], "record", False, True, in_person=True)
+    scenario("in person with Me print: still Me", {"mic": {"segments": [(0, 2, "S1"), (3, 20, "S2")], "embeddings": {"S1": other, "S2": mic_me}}},
+             [{"name": "Fahad", "emb": e_me, "is_me": True}], "record", False, True, in_person=True)
     scenario("import without Me: no assumption", {"mic": {"segments": [(0, 5, "S1")], "embeddings": {"S1": mic_me}}}, [], "import", False, True)
     scenario("numbering by first start across tracks", {
         "mic": {"segments": [(30, 31, "S1"), (50, 52, "S2")], "embeddings": {"S1": other, "S2": speakers._unit(np.asarray(with_cos(rng, idn[2], 0.9), dtype=np.float32))}},
@@ -465,7 +469,7 @@ def assemble_cases():
     rng = random.Random(14)
 
     def run(name, words_by_track, diar_by_track, spec, attendees, source, bleed, offsets, labels, participants=(), auto_naming=True,
-            user_name="Fahad", reply=None):
+            user_name="Fahad", reply=None, in_person=False):
         c = new_db()
         for sp in spec:
             speakers.add_person(c, sp["name"], sp.get("emb"), email=sp.get("email"), is_me=sp.get("is_me", False))
@@ -485,7 +489,7 @@ def assemble_cases():
         warnings = []
         try:
             recs, turns = pm.assemble(words_by_track, diar_by_track, c, attendees, source, bleed, offsets, labels, warnings,
-                                      participants=participants, auto_naming=auto_naming, user_name=user_name)
+                                      participants=participants, auto_naming=auto_naming, user_name=user_name, in_person=in_person)
         finally:
             notes.run_claude, speakers.build_naming_prompt = real_run, real_bnp
         cases.append({"name": name,
@@ -493,7 +497,7 @@ def assemble_cases():
                       "diar_by_track": [[t, None if d is None else diar_json(d)] for t, d in diar_by_track.items()],
                       "people": people0, "attendees": attendees, "participants": list(participants), "source": source, "bleed": bleed,
                       "offsets": [[k, v] for k, v in offsets.items()], "labels": [[k, v] for k, v in labels.items()],
-                      "auto_naming": auto_naming, "user_name": user_name, "reply": reply,
+                      "auto_naming": auto_naming, "user_name": user_name, "reply": reply, **({"in_person": True} if in_person else {}),
                       "expected": {"recs": [rec_json(r) for r in recs],
                                    "turns": [{"speaker": t["speaker"], "start": t["start"], "end": t["end"], "text": t["text"]} for t in turns],
                                    "prompt": seen["prompt"], "candidates": seen["cands"], "warnings": warnings}})
@@ -532,6 +536,11 @@ def assemble_cases():
     diar = {"system": {"segments": [(0, 2, "S1"), (3, 5, "S2")], "embeddings": {"S1": e1}}}
     run("cluster without embedding falls back", {"system": [W("a", 0.1, 0.5), W("b", 3.2, 3.6)]}, diar, [], ["Alice"], "import", False, {}, labels)
     run("diarization failed: one speaker per track", {"mic": [W("hi", 0, 1)], "system": [W("yo", 2, 3)]}, {}, [], [], "record", False, {"system": 0.3}, labels)
+    two = {"mic": {"segments": [(0, 2, "S1"), (3, 20, "S2")], "embeddings": {"S1": e1, "S2": speakers._unit(np.asarray(with_cos(rng, ids[1], 0.9), dtype=np.float32))}}}
+    two_words = {"mic": [W("hello", 0.1, 0.5), W("everyone", 3.2, 3.9)]}
+    run("in person: no Me assumed, fallback label Room", two_words, two, [], [], "record", False, {}, {"mic": "Room", "system": "Them"}, in_person=True)
+    run("call: same audio, dominant mic cluster is Me", two_words, two, [], [], "record", False, {}, labels)
+    run("in person: diarization failed, one Room speaker", {"mic": [W("hi", 0, 1)]}, {}, [], [], "record", False, {}, {"mic": "Room", "system": "Them"}, in_person=True)
     run("custom label Room", {"mic": [W("hi", 0, 1)]}, {}, [], [], "import", False, {}, {"mic": "Room"})
     run("unknown label", {"mic": [W("hi", 0, 1)]}, {}, [], [], "import", False, {}, {"mic": "Zed"})
     return cases
@@ -679,7 +688,26 @@ def real_fixture():
     return {"dir": str(REAL).replace(str(Path.home()), "~"), "offset_s": off, "expected": d, "samples": samples}
 
 
+def setting_fixture():
+    """meta.json -> header Setting text (library.setting_text), and the rendered header for fixed meetings."""
+    from datetime import datetime
+    import library
+    metas = [{}, {"setting": "in_person"}, {"setting": "in_person", "call_apps": ["Zoom"]}, {"setting": "call"}, {"setting": "call", "call_apps": []},
+             {"setting": "call", "call_apps": ["Zoom"]}, {"setting": "call", "call_apps": ["Zoom", "Chrome"]}, {"setting": "call", "call_apps": ["", " ", "Teams"]},
+             {"setting": "other"}, {"setting": None}, {"setting": 3}]
+    texts = [{"meta": m, "expected": library.setting_text(m)} for m in metas]
+    start = datetime.fromisoformat("2026-10-13T19:22:30+05:00")
+    headers = []
+    for setting in (None, "", "In person", "Call (Zoom, Chrome)"):
+        for att in ([], ["Priya Nair", "Sam"]):
+            m = {"title": "Weekly sync", "start": start.isoformat(), "duration": 3048.4, "attendees": att, **({} if setting is None else {"setting": setting})}
+            headers.append({"title": m["title"], "start": m["start"], "duration": m["duration"], "attendees": att, "setting": setting,
+                            "expected": library.meeting_header(m)})
+    return {"texts": texts, "headers": headers}
+
+
 def main():
+    dump("setting.json", setting_fixture())
     dump("turns.json", turns_fixture())
     dump("voiceprints.json", voiceprint_fixture())
     dump("echo.json", echo_fixture())

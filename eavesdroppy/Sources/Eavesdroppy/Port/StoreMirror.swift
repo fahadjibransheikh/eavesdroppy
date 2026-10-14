@@ -82,6 +82,8 @@ enum StoreMirror {
     struct Meeting {
         var id: Int, title: String, start: String, duration: Double, attendees: [String], notesMD: String
         var folder: String?, audioPath: String?, turns: [Turn]
+        /// The Setting text when the caller already knows it; else it is read from the raw archive's meta.json (no schema column).
+        var setting: String? = nil, rawDir: String? = nil
     }
 
     static func fmtTS(_ sec: Double) -> String {
@@ -121,8 +123,40 @@ enum StoreMirror {
 
     static func header(_ m: Meeting) throws -> String {
         let p = try startParts(m.start)
-        return ["# \(m.title)", "", "- **Date:** \(p.date) \(p.hm) (UTC\(p.offset))", "- **Duration:** \(fmtTS(m.duration))",
-                "- **Attendees:** \(m.attendees.isEmpty ? "—" : m.attendees.joined(separator: ", "))"].joined(separator: "\n")
+        var lines = ["# \(m.title)", "", "- **Date:** \(p.date) \(p.hm) (UTC\(p.offset))", "- **Duration:** \(fmtTS(m.duration))",
+                     "- **Attendees:** \(m.attendees.isEmpty ? "—" : m.attendees.joined(separator: ", "))"]
+        if let s = meetingSetting(m) { lines.append("- **Setting:** \(s)") }   // recordings made before the field existed have none
+        return lines.joined(separator: "\n")
+    }
+
+    /// library.setting_text: "In person", "Call (Zoom, Chrome)", "Call", or nil when the recording says nothing.
+    static func settingText(_ meta: [String: Any]) -> String? {
+        switch meta["setting"] as? String {
+        case "in_person": return "In person"
+        case "call":
+            let apps = (meta["call_apps"] as? [Any] ?? []).map { "\($0)" }.filter { !PyText.strip($0).isEmpty }
+            return apps.isEmpty ? "Call" : "Call (\(apps.joined(separator: ", ")))"
+        default: return nil
+        }
+    }
+
+    /// library.meeting_setting: m.setting, else the raw archive's meta.json copy (the schema has no column for it).
+    static func meetingSetting(_ m: Meeting) -> String? {
+        if let s = m.setting, !s.isEmpty { return s }
+        guard let raw = m.rawDir, !raw.isEmpty, let d = try? Data(contentsOf: URL(fileURLWithPath: raw + "/meta.json")),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        return settingText(o)
+    }
+
+    /// The Setting line of an existing notes.md header block (title, blank line, bullets), so a re-render keeps it after the raw audio expired.
+    static func keptSetting(_ notesPath: String) -> String? {
+        guard let t = try? String(contentsOfFile: notesPath, encoding: .utf8) else { return nil }
+        let blocks = t.components(separatedBy: "\n\n")
+        guard blocks.count > 2 else { return nil }
+        for l in blocks[1].components(separatedBy: "\n") where l.hasPrefix("- **Setting:** ") {
+            return PyText.strip(String(l.dropFirst("- **Setting:** ".count)))
+        }
+        return nil
     }
 
     static func transcriptBody(_ m: Meeting) -> String {
@@ -164,7 +198,8 @@ enum StoreMirror {
 
     /// Atomically (re)write notes.md and transcript.md in the meeting's folder, creating it (or renaming it after a title
     /// change, with its .m4a) first. Returns the folder and audio path to record.
-    static func write(_ m: Meeting, outRoot: String) throws -> (folder: String, audioPath: String?) {
+    static func write(_ m0: Meeting, outRoot: String) throws -> (folder: String, audioPath: String?) {
+        var m = m0
         let fm = FileManager.default, root = PyPath.norm(outRoot)
         try checkOutRoot(root)
         try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
@@ -187,6 +222,7 @@ enum StoreMirror {
             if rename(a, new) != 0 { throw CocoaError(.fileWriteUnknown) }
             audio = new
         }
+        if meetingSetting(m) == nil { m.setting = keptSetting(PyPath.join(folder, "notes.md")) }   // raw audio expired: keep the line the file has
         try writeAtomic(PyPath.join(folder, "transcript.md"), try renderTranscript(m))
         try writeAtomic(PyPath.join(folder, "notes.md"), try renderNotes(m))
         return (folder, audio)

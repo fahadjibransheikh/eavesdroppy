@@ -274,6 +274,12 @@ dt = datetime.fromisoformat(START)
 hdr = PM.render_header("Q4 plan", dt, 3720, ["ann@x.com", "Bob"])
 assert L.meeting_header(m) == hdr, (L.meeting_header(m), hdr)
 assert L.render_header("T", dt, 5, []) == PM.render_header("T", dt, 5, [])
+# the Setting line: only when known, last in the header block; old meetings (no setting) render exactly as before
+assert L.render_header("T", dt, 5, [], "In person") == PM.render_header("T", dt, 5, []) + "\n- **Setting:** In person"
+assert L.render_header("T", dt, 5, [], None) == L.render_header("T", dt, 5, [], "") == PM.render_header("T", dt, 5, [])
+assert L.meeting_header({**m, "setting": "Call (Zoom)"}) == hdr + "\n- **Setting:** Call (Zoom)"
+assert [L.setting_text(x) for x in ({}, {"setting": "in_person"}, {"setting": "call"}, {"setting": "call", "call_apps": ["Zoom", "Chrome"]}, {"setting": "x"})] == [
+    None, "In person", "Call", "Call (Zoom, Chrome)", None]
 body = PM.render_transcript([{"speaker": t["speaker"], "start": t["start"], "end": t["end"], "text": t["text"]} for t in m["turns"]])
 assert L.render_transcript_md(m) == f"{hdr}\n{PM.SEP}\n{body}\n"  # == process() transcript.md
 assert "**[1:01:40] Me:** Ship the roadmap on Friday" in body  # H:MM:SS past an hour

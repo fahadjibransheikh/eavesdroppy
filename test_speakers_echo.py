@@ -341,6 +341,21 @@ assert (s2["label"], s2["kind"], s2["person_id"]) == ("Speaker 2", "suggest", id
 assert abs(np.linalg.norm(R["mic", "S1"]["embedding"]) - 1) < 1e-5 and R["mic", "S1"]["speech_s"] == 30.0
 assert n_of(p, ids["alice"]) == 2  # learned from the auto match on the mic track
 
+# in person, no enrollment: nobody in the room is assumed to be the user; the dominant mic voice is just Speaker n
+p, ids = fresh()
+R = by(sp.assign_speakers({"mic": mic, "system": system}, p, [], "record", bleed=False, in_person=True))
+assert (R["mic", "S1"]["label"], R["mic", "S1"]["kind"], R["mic", "S1"]["person_id"]) == ("Speaker 1", "new", None), R["mic", "S1"]
+assert (R["mic", "S2"]["label"], R["mic", "S2"]["kind"]) == ("Alice", "auto"), R["mic", "S2"]  # voiceprint matches still name people
+# in person WITH the user's voiceprint: the matching mic voice is still Me
+p, ids = fresh(enrolled=True)
+me_mic = diar([(0, 30, "S1"), (31, 40, "S2")], {"S1": stranger1, "S2": at_cos(rng, me_e, 0.9)})
+R = by(sp.assign_speakers({"mic": me_mic}, p, [], "record", bleed=False, in_person=True))
+assert (R["mic", "S2"]["label"], R["mic", "S2"]["kind"]) == ("Fahad", "me") and R["mic", "S1"]["label"] == "Speaker 1", R
+# calls are unchanged
+p, ids = fresh()
+R = by(sp.assign_speakers({"mic": mic}, p, [], "record", bleed=False, in_person=False))
+assert R["mic", "S1"]["label"] == "Me" and R["mic", "S1"]["kind"] == "assumed", R
+
 # bleed: no learning from the mic track; a system-track auto match still learns
 p, ids = fresh()
 sysA = diar([(5, 20, "S1")], {"S1": at_cos(rng, alice_e, 0.9)})

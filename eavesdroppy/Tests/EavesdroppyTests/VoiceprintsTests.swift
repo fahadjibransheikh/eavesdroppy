@@ -73,7 +73,7 @@ import Testing
             let tracks = Dictionary(uniqueKeysWithValues: (c["tracks"] as! [[Any]]).map { ($0[0] as! String, diar($0[1])) })
             var ppl = people(c["people"])
             let bleed = F.b(c["bleed"])
-            let got = V.assignSpeakers(tracks, people: &ppl, source: c["source"] as! String, bleed: bleed, update: F.b(c["update"]))
+            let got = V.assignSpeakers(tracks, people: &ppl, source: c["source"] as! String, bleed: bleed, update: F.b(c["update"]), inPerson: (c["in_person"] as? Bool) ?? false)
             same(got, (c["recs"] as! [Any]).map(rec), name)
             kinds.formUnion(got.map(\.kind))
             let learn = V.learnable(got, bleed: bleed), want = c["learnable"] as! [[Any]]
@@ -136,7 +136,8 @@ import Testing
             let labels = Dictionary(uniqueKeysWithValues: F.pairs(c["labels"]).map { ($0.0, $0.1 as! String) })
             var a = Turns.assemble(wordsByTrack: words, diarByTrack: diars, people: people(c["people"]), attendees: c["attendees"] as! [String],
                                    source: c["source"] as! String, bleed: F.b(c["bleed"]), offsets: offsets, labels: labels,
-                                   participants: c["participants"] as! [String], autoNaming: F.b(c["auto_naming"]), userName: c["user_name"] as! String)
+                                   participants: c["participants"] as! [String], autoNaming: F.b(c["auto_naming"]), userName: c["user_name"] as! String,
+                                   inPerson: (c["in_person"] as? Bool) ?? false)
             let want = c["expected"] as! [String: Any]
             #expect(a.prompt == (want["prompt"] as? String ?? ""), Comment(rawValue: "\(name): prompt"))
             if let cands = want["candidates"] as? [String] { #expect(a.candidates == cands, Comment(rawValue: "\(name): candidates")) }

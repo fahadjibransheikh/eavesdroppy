@@ -205,7 +205,7 @@ def learnable(recs, bleed):
             if ((r["kind"] == "me" and r["score"] >= AUTO_THR) or r["kind"] == "auto") and not (r["track"] == "mic" and bleed)]
 
 
-def assign_speakers(tracks, db, attendees, source, bleed, update=True):
+def assign_speakers(tracks, db, attendees, source, bleed, update=True, in_person=False):
     """tracks: {"mic": diarize() result, "system": diarize() result} (either may be missing/empty).
     Returns one record per cluster: {track, cluster_id, label, person_id, score, kind, embedding, speech_s}.
     kind: "me" (matched the enrolled Me print), "assumed" (record without enrollment: dominant mic cluster),
@@ -213,7 +213,8 @@ def assign_speakers(tracks, db, attendees, source, bleed, update=True):
           (suggest keeps person_id as the suggestion); label is the person's name only for me/auto/assumed.
     Prints learn only from "me"/"auto" matches >= AUTO_THR, and never from the mic track when bleed is true (D4);
     pass update=False when re-running a meeting, or to apply learnable(recs, bleed) later, so a print is not counted twice.
-    `attendees` is not used here; it feeds build_naming_prompt afterwards."""
+    in_person: everyone in the room is on the mic track, so without an enrolled Me print the dominant mic cluster is just
+    another voice ("Speaker n"), not "Me". `attendees` is not used here; it feeds build_naming_prompt afterwards."""
     recs = []
     for track in ("mic", "system"):
         t = tracks.get(track) or {}
@@ -236,7 +237,7 @@ def assign_speakers(tracks, db, attendees, source, bleed, update=True):
             hits = [sysbest] if sysbest and sysbest["_me"] >= ME_THR else []
         for r in hits:
             r.update(label=mname, person_id=mid, score=round(r["_me"], 4), kind="me")
-    elif source == "record" and mic:
+    elif source == "record" and mic and not in_person:
         r = max(mic, key=lambda r: r["speech_s"])
         r.update(label="Me", kind="assumed")
     for r in recs:

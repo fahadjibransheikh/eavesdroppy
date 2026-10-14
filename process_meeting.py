@@ -36,6 +36,7 @@ BLOCK = 1 << 18  # frames per streamed block
 WHAT = {"mic": "Mic", "system": "Call"}  # names used in warnings
 LINEAR_URL = "https://api.linear.app/graphql"
 OLD_LABEL = {"mic": "Me", "system": "Them"}  # one speaker per track when diarization is unavailable
+IN_PERSON_LABEL = {"mic": "Room", "system": "Them"}  # ...in person the mic is the whole room, not the user alone
 FALLBACK_KIND = {"Me": "me", "Them": "remote", "Room": "room"}
 GAP = 1.0
 MAX_WORD_S = 1.2  # Parakeet word ends often run on to the next word's start; no real word is held longer
@@ -457,7 +458,7 @@ def naming_snippets(recs, turns, n=10, chars=240):
 
 
 def assemble(words_by_track, diar_by_track, db, attendees, source, bleed, offsets, labels, warnings,
-             participants=(), auto_naming=True, user_name=None):
+             participants=(), auto_naming=True, user_name=None, in_person=False):
     """Words + diarization -> (speaker records, turns). words_by_track: {track: [{text,start,end}]};
     diar_by_track: {track: speakers.diarize() result, or None when diarization failed}; offsets/labels per track
     (labels = the one-speaker-per-track fallback names). Turn `speaker` is an index into the returned records."""
@@ -470,7 +471,7 @@ def assemble(words_by_track, diar_by_track, db, attendees, source, bleed, offset
             if used:
                 kept[track] = {"segments": [s for s in d["segments"] if s[2] in used],
                                "embeddings": {c: e for c, e in d["embeddings"].items() if c in used}}
-    recs = speakers.assign_speakers(kept, db, attendees, source, bleed, update=False)  # process() learns once the meeting is stored
+    recs = speakers.assign_speakers(kept, db, attendees, source, bleed, update=False, in_person=in_person)  # process() learns once the meeting is stored
     index = {(r["track"], r["cluster_id"]): i for i, r in enumerate(recs)}
 
     def home(track, cid):
@@ -650,6 +651,7 @@ def process(session, out_root, container=None, user_name=None):
     is_import = meta.get("source") == "import"
     source = "import" if is_import else "record"
     echo_removal = meta.get("echo_removal", True) is not False
+    in_person = not is_import and meta.get("setting") == "in_person"  # no call: the mic carries the whole room, nothing plays back into it
     template = meta.get("template") or "general"
     user_name = user_name_of(user_name, meta.get("user_name"))
     user_notes = read_user_notes(session, meta)
@@ -673,7 +675,7 @@ def process(session, out_root, container=None, user_name=None):
                 mic = session / "mic.wav"
                 if not mic.is_file():
                     raise Fail(f"{mic} not found")
-                files, labels, names = {"mic": mic}, OLD_LABEL, WHAT
+                files, labels, names = {"mic": mic}, IN_PERSON_LABEL if in_person else OLD_LABEL, WHAT
                 if (session / "system.wav").is_file():
                     files["system"] = session / "system.wav"
 
@@ -697,7 +699,8 @@ def process(session, out_root, container=None, user_name=None):
                 if tr["dur"] < MIN_TRACK_SECONDS:
                     warnings.append(f"{names[key]} track too short ({tr['dur']:.1f} s), skipped")
                 elif tr["peak"] < SILENT_PEAK:
-                    warnings.append(f"{names[key]} audio was silent")
+                    if not (in_person and key == "system"):  # a quiet call-audio track is what an in-person meeting records
+                        warnings.append(f"{names[key]} audio was silent")
                 else:
                     try:
                         to_16k_wav(tr["mono"], tmp / f"{key}16k.wav")
@@ -708,7 +711,9 @@ def process(session, out_root, container=None, user_name=None):
             # echo (record sessions with a usable system track): mic transcription and diarization use the cleaned mic
             src, bleed, dedup, sys_off = dict(w16), False, False, 0.0
             echo_warnings = []
-            if "mic" in w16 and "system" in w16:
+            if in_person:
+                print("Echo: skipped (in-person meeting: no call audio to bleed into the mic)", file=sys.stderr)
+            elif "mic" in w16 and "system" in w16:
                 sys_off = float(track_off.get("system", 0.0)) - float(track_off.get("mic", 0.0))
                 bleed, src["mic"], dedup = echo_stage(w16["mic"], w16["system"], sys_off, echo_removal, tmp, echo_warnings)
 
@@ -741,7 +746,7 @@ def process(session, out_root, container=None, user_name=None):
                     warnings.append(f"Speaker separation failed on the {names[key]} track ({e}); labelled it as one speaker")
                     diar[key] = None
             recs, turns = assemble(words, diar, db, attendees, source, bleed, track_off, labels, warnings,
-                                   [str(n) for n in meta.get("participants", [])], meta.get("auto_naming", True) is not False, user_name)
+                                   [str(n) for n in meta.get("participants", [])], meta.get("auto_naming", True) is not False, user_name, in_person)
 
             play = {k: tr["mono"] for k, tr in prepped.items()}
             if "mic" in play and src.get("mic") != w16.get("mic"):  # echo removed: play the cleaned mic, not the echo

@@ -11,7 +11,7 @@ enum StoreLibrary {
 
     /// library.get_meeting, reduced to what the mirror renders.
     static func meeting(_ db: StoreDB, _ id: Int) throws -> StoreMirror.Meeting? {
-        guard let r = try db.rows("SELECT title, start, duration, attendees, notes_md, folder, audio_path FROM meetings WHERE id = ?", [id]).first
+        guard let r = try db.rows("SELECT title, start, duration, attendees, notes_md, folder, audio_path, raw_dir FROM meetings WHERE id = ?", [id]).first
         else { return nil }
         guard let att = try? JSONSerialization.jsonObject(with: Data((r.text(3) ?? "[]").utf8), options: .fragmentsAllowed) as? [String]
         else { throw StoreCrash(kind: "TypeError", message: "attendees of meeting \(id) is not a JSON list of strings") }
@@ -19,7 +19,7 @@ enum StoreLibrary {
                                 + " WHERE t.meeting_id = ? ORDER BY t.idx", [id])
             .map { StoreMirror.Turn(start: $0.double(0) ?? 0, speaker: $0.text(1) ?? "?", text: $0.text(2) ?? "") }
         return StoreMirror.Meeting(id: id, title: r.text(0) ?? "", start: r.text(1) ?? "", duration: r.double(2) ?? 0, attendees: att,
-                                   notesMD: r.text(4) ?? "", folder: r.text(5), audioPath: r.text(6), turns: turns)
+                                   notesMD: r.text(4) ?? "", folder: r.text(5), audioPath: r.text(6), turns: turns, rawDir: r.text(7))
     }
 
     static func renameMeeting(_ db: StoreDB, _ id: Int, _ title: String) throws {

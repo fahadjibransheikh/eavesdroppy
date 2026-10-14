@@ -10,6 +10,7 @@ enum Processor {
     static let gap = 1.0
     static let namingTimeout: TimeInterval = 120   // NAMING_TIMEOUT
     static let oldLabel = ["mic": "Me", "system": "Them"], what = ["mic": "Mic", "system": "Call"]
+    static let inPersonLabel = ["mic": "Room", "system": "Them"]   // IN_PERSON_LABEL: the mic is the whole room, not the user alone
     static let defaultUserName = "Me"   // Python's notes.USER_NAME ("Fahad") is this Mac's name; the droplet always passes one
 
     struct Engines {
@@ -203,6 +204,7 @@ enum Processor {
         let isImport = meta["source"] as? String == "import"
         let source = isImport ? "import" : "record"
         let echoRemoval = (meta["echo_removal"] as? Bool) != false
+        let inPerson = !isImport && meta["setting"] as? String == "in_person"   // no call: the mic carries the whole room, nothing plays back into it
         var template = (meta["template"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "general"
         let userName = userNameOf(p.userName, meta["user_name"] as? String)
         let userNotes = readUserNotes(session, meta)
@@ -233,7 +235,7 @@ enum Processor {
         } else {
             let mic = session.appendingPathComponent("mic.wav")
             guard PyPath.exists(mic.path) else { throw StoreError("\(mic.path) not found") }
-            files = [("mic", mic)]; labels = oldLabel; names = what
+            files = [("mic", mic)]; labels = inPerson ? inPersonLabel : oldLabel; names = what
             if PyPath.exists(session.appendingPathComponent("system.wav").path) { files.append(("system", session.appendingPathComponent("system.wav"))) }
         }
 
@@ -259,7 +261,7 @@ enum Processor {
             if tr.duration < minTrackSeconds {
                 warnings.append("\(names[key]!) track too short (\(String(format: "%.1f", tr.duration)) s), skipped")
             } else if tr.peak < silentPeak {
-                warnings.append("\(names[key]!) audio was silent")
+                if !(inPerson && key == "system") { warnings.append("\(names[key]!) audio was silent") }   // a quiet call-audio track is what an in-person meeting records
             } else {
                 let dst = tmp.appendingPathComponent("\(key)16k.wav")
                 do { try EngineAudio.to16kWav(tr.mono, dst); w16.append((key, dst)) }
@@ -274,7 +276,9 @@ enum Processor {
         var bleed = false, dedup = false
         var sysOff = 0.0
         var echoWarnings: [String] = []
-        if let mic16 = src["mic"], let sys16 = src["system"] {
+        if inPerson {
+            p.log("Echo: skipped (in-person meeting: no call audio to bleed into the mic)")
+        } else if let mic16 = src["mic"], let sys16 = src["system"] {
             sysOff = (trackOff["system"] ?? 0.0) - (trackOff["mic"] ?? 0.0)
             let e = try await echoStage(mic16: mic16, sys16: sys16, offset: sysOff, removal: echoRemoval, remover: p.engines.echoRemover(), tmp: tmp,
                                         warnings: &echoWarnings, log: p.log)
@@ -319,7 +323,7 @@ enum Processor {
         let people = try StorePeople.load(db)
         let assembled = Turns.assemble(wordsByTrack: words, diarByTrack: diar, people: people, attendees: attendees, source: source, bleed: bleed,
                                        offsets: trackOff, labels: labels, participants: (meta["participants"] as? [Any] ?? []).map { "\($0)" },
-                                       autoNaming: (meta["auto_naming"] as? Bool) != false, userName: userName)
+                                       autoNaming: (meta["auto_naming"] as? Bool) != false, userName: userName, inPerson: inPerson)
         var recs = assembled.recs
         let turns = assembled.turns
         if !assembled.prompt.isEmpty, case .provider(let prov) = p.resolution {

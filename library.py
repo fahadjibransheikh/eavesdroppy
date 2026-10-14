@@ -199,11 +199,25 @@ def folder_name(title, start_dt):
     return f"{start_dt:%Y-%m-%d %H%M} – {sanitize_title(title)}"
 
 
-def render_header(title, start_dt, duration, attendees):
-    return "\n".join([f"# {title}", "",
-                      f"- **Date:** {start_dt:%Y-%m-%d %H:%M} (UTC{start_dt.isoformat()[-6:]})",
-                      f"- **Duration:** {fmt_ts(duration)}",
-                      f"- **Attendees:** {', '.join(attendees) if attendees else '—'}"])
+def render_header(title, start_dt, duration, attendees, setting=None):
+    lines = [f"# {title}", "",
+             f"- **Date:** {start_dt:%Y-%m-%d %H:%M} (UTC{start_dt.isoformat()[-6:]})",
+             f"- **Duration:** {fmt_ts(duration)}",
+             f"- **Attendees:** {', '.join(attendees) if attendees else '—'}"]
+    if setting:  # recordings made before the field existed have none: the line is left out
+        lines.append(f"- **Setting:** {setting}")
+    return "\n".join(lines)
+
+
+def setting_text(meta):
+    """meta.json -> "In person", "Call (Zoom, Chrome)", "Call", or None when the recording says nothing."""
+    s = meta.get("setting") if isinstance(meta, dict) else None
+    if s == "in_person":
+        return "In person"
+    if s == "call":
+        apps = [str(a) for a in (meta.get("call_apps") or []) if str(a).strip()]
+        return f"Call ({', '.join(apps)})" if apps else "Call"
+    return None
 
 
 def neutralize_fences(s):
@@ -535,8 +549,20 @@ def _start_dt(m):
     return datetime.fromisoformat(m["start"])
 
 
+def meeting_setting(m):
+    """The header's Setting text. The schema has no column for it (v4 is frozen), so it is read from the raw archive's
+    meta.json copy (raw_dir), or taken from m["setting"] when the caller already knows it (write_mirror carries the
+    line of the file it is replacing, so it survives the raw audio expiring)."""
+    if m.get("setting"):
+        return m["setting"]
+    try:
+        return setting_text(json.loads((Path(m["raw_dir"]) / "meta.json").read_text())) if m.get("raw_dir") else None
+    except (OSError, ValueError):
+        return None
+
+
 def meeting_header(m):
-    return render_header(m["title"], _start_dt(m), m.get("duration") or 0, m.get("attendees") or [])
+    return render_header(m["title"], _start_dt(m), m.get("duration") or 0, m.get("attendees") or [], meeting_setting(m))
 
 
 def transcript_body(m):
@@ -603,6 +629,13 @@ def write_mirror(m, out_root):
         new = audio.with_name(f"{cur.name}.m4a")
         os.rename(audio, new)
         audio = new
+    if not meeting_setting(m):  # raw audio expired: keep the line the file already has
+        try:
+            kept = _SETTING.search((cur / "notes.md").read_text().split("\n\n", 2)[1])  # the header block: title, blank, then the bullets
+        except (OSError, IndexError):  # no file yet, or one without a header block
+            kept = None
+        if kept:
+            m = {**m, "setting": kept.group(1).strip()}
     _write_atomic(cur / "transcript.md", render_transcript_md(m))
     _write_atomic(cur / "notes.md", render_notes_md(m))
     return {"folder": str(cur), "audio_path": str(audio) if audio else None}
@@ -624,6 +657,7 @@ def sync_mirror(db, meeting_id, out_root):
 _DATE = re.compile(r"^- \*\*Date:\*\* (\d{4}-\d\d-\d\d) (\d\d:\d\d) \(UTC([+-]\d\d:\d\d)\)\s*$", re.M)
 _DUR = re.compile(r"^- \*\*Duration:\*\* (\d+(?::\d\d){1,2})\s*$", re.M)
 _ATT = re.compile(r"^- \*\*Attendees:\*\* (.*)$", re.M)
+_SETTING = re.compile(r"^- \*\*Setting:\*\* (.*)$", re.M)
 _TURN = re.compile(r"^\*\*\[(\d+(?::\d\d){1,2})\] (.+?):\*\* ?(.*)$")
 _ACTION = re.compile(r"^\s*[-*]\s*\[( |x|X)\]\s*(.+?)\s*$")
 

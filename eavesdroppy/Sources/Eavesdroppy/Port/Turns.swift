@@ -151,7 +151,7 @@ enum Turns {
     static func assemble(wordsByTrack: [(track: String, words: [Word])], diarByTrack: [String: Voiceprints.Diarization],
                          people: [Voiceprints.Person], attendees: [String], source: String, bleed: Bool,
                          offsets: [String: Double], labels: [String: String], participants: [String] = [],
-                         autoNaming: Bool = true, userName: String) -> Assembled {
+                         autoNaming: Bool = true, userName: String, inPerson: Bool = false) -> Assembled {
         var mapped: [(track: String, words: [Word], speakers: [String?])] = []
         var kept: [String: Voiceprints.Diarization] = [:]
         for (track, words) in wordsByTrack {
@@ -168,7 +168,7 @@ enum Turns {
             }
         }
         var people = people
-        var recs = Voiceprints.assignSpeakers(kept, people: &people, source: source, bleed: bleed, update: false)
+        var recs = Voiceprints.assignSpeakers(kept, people: &people, source: source, bleed: bleed, update: false, inPerson: inPerson)
         struct Key: Hashable { var track: String; var cluster: String? }
         var index: [Key: Int] = [:]
         for (i, r) in recs.enumerated() { index[Key(track: r.track, cluster: r.clusterID)] = i }

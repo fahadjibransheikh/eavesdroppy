@@ -421,7 +421,7 @@ enum Processor {
         let spk = recs.map { r in
             NewSpeaker(label: r.label, track: isImport ? "room" : r.track, cluster: r.clusterID,
                        personID: (r.kind == .me || r.kind == .auto) ? r.personID : nil,
-                       suggestedPersonID: r.kind == .suggest ? r.personID : nil, score: r.score, kind: r.kind.rawValue,
+                       suggestedPersonID: r.kind == .suggest ? r.personID : nil, score: r.score, kind: r.namedBy == "intro" ? "intro" : r.kind.rawValue,  // unlinked and never learned until saved
                        embedding: r.embedding.map { e in e.withUnsafeBufferPointer { Data(buffer: $0) } })
         }
         let mid = try StoreLibrary.addMeeting(db, NewMeeting(title: title, start: startISO, duration: duration, source: source, rawDir: rawDir,

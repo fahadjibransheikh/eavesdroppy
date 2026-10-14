@@ -51,7 +51,9 @@ enum StoreLibrary {
             guard let row = try db.rows("SELECT meeting_id, label FROM speakers WHERE id = ?", [speakerID]).first,
                   let mid = row.int(0) else { throw StoreError("no speaker \(speakerID)") }
             var affected: Set<Int> = [mid], renamed: [(Int, String)] = [(mid, row.text(1) ?? "")]
-            try db.run("UPDATE speakers SET label = ?, person_id = COALESCE(?, person_id) WHERE id = ?", [name, personID, speakerID])
+            // a rename settles an introduction-named speaker (kind "intro"): the user has now chosen the name
+            try db.run("UPDATE speakers SET label = ?, person_id = COALESCE(?, person_id), kind = CASE WHEN kind = 'intro' THEN 'new' ELSE kind END WHERE id = ?",
+                       [name, personID, speakerID])
             if let pid = personID {
                 for r in try db.rows("SELECT id, meeting_id, label FROM speakers WHERE person_id = ? AND label != ?", [pid, name]) {
                     try db.run("UPDATE speakers SET label = ? WHERE id = ?", [name, r.int(0)])

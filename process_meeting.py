@@ -514,7 +514,8 @@ def db_speakers(recs, source):
     return [{"track": "room" if source == "import" else r["track"], "cluster": r["cluster_id"], "label": r["label"],
              "person_id": r["person_id"] if r["kind"] in ("me", "auto") else None,
              "suggested_person_id": r["person_id"] if r["kind"] == "suggest" else None, "score": r.get("score"),
-             "kind": r["kind"], "embedding": None if r.get("embedding") is None else np.asarray(r["embedding"], np.float32).tobytes()}
+             "kind": "intro" if r.get("named_by") == "intro" else r["kind"],  # still unlinked and never learned until saved
+             "embedding": None if r.get("embedding") is None else np.asarray(r["embedding"], np.float32).tobytes()}
             for r in recs]
 
 

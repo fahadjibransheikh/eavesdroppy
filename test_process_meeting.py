@@ -415,6 +415,9 @@ rec = lambda kind, pid: {"track": "system", "cluster_id": "S1", "label": "Speake
 sug, auto, new = pm.db_speakers([rec("suggest", 5), rec("auto", 6), rec("new", None)], "record")
 assert (sug["person_id"], sug["suggested_person_id"]) == (None, 5) and (auto["person_id"], auto["suggested_person_id"]) == (6, None)
 assert (new["person_id"], new["suggested_person_id"]) == (None, None)
+# a name from the meeting's own introductions is stored as kind "intro": unlinked, and speakers.learnable never learns it
+intro = pm.db_speakers([{**rec("new", None), "label": "Priya", "named_by": "intro"}, {**rec("new", None), "label": "Bob", "named_by": "claude"}], "record")
+assert [(x["kind"], x["person_id"]) for x in intro] == [("intro", None), ("new", None)]
 
 
 def decode(m4a):
@@ -701,7 +704,8 @@ with Env() as E:
     assert 'Possible names' not in fk.prompts() and "evidence" in fk.prompts(), fk.prompts()
     by = {(s["track"], s["cluster"]): s for s in m["speakers"]}
     assert [by[("mic", c)]["label"] for c in ("S1", "S2", "S3")] == ["Priya", "Sam", "Speaker 3"], by
-    assert all(s["kind"] == "new" and s["person_id"] is None and s["suggested_person_id"] is None for s in m["speakers"]), by  # nothing linked or learned
+    assert [by[("mic", c)]["kind"] for c in ("S1", "S2", "S3")] == ["intro", "intro", "new"], by  # introduction names are kept apart from unnamed voices
+    assert all(s["person_id"] is None and s["suggested_person_id"] is None for s in m["speakers"]), by  # nothing linked or learned
     db = E.db(); assert db.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0; db.close()
     assert "**[00:00] Priya:**" in (Path(r["folder"]) / "transcript.md").read_text()
     # a name that is in neither the quote nor the lines, and one with no quote at all, change nothing
@@ -906,6 +910,30 @@ with Env() as E:
     fails("rename-speaker", str(s_oth), "X", "--person-id", "999", *C(E), contains="no person 999")
     fails("rename-speaker", str(s_oth), "X", "--person-id", str(pid), "--new-person", *C(E), contains="either --person-id or --new-person")
     assert person(E, pid) is not None and E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0] == 4  # failures made no people
+
+# ---------- rename-speaker on an introduction-named speaker (kind "intro"): "Save <name>'s voice" ----------
+with Env() as E:
+    db = E.db(); pid = speakers.add_person(db, "Priya", basis(1)); db.close()
+    near = (basis(5) * 0.95 + basis(6) * 0.05).astype(np.float32)
+    mid, (_, i_new, i_known, i_plain) = seed(E, spk=[("mic", "Me", "assumed", None, basis(0)), ("system", "Marcus", "intro", None, near),
+                                                      ("system", "Priya", "intro", None, basis(1)), ("system", "Zed", "intro", None, basis(7))])
+    kinds = lambda: [s["kind"] for s in E.meeting({"meeting_id": mid})["speakers"]]
+    assert kinds() == ["assumed", "intro", "intro", "intro"]
+    n0 = person(E, pid)["n"]
+    # new person: created with this voice (n = 1), linked, no longer an introduction
+    ok("rename-speaker", str(i_new), "Marcus", "--new-person", *C(E))
+    sp = E.meeting({"meeting_id": mid})["speakers"][1]
+    p = person(E, sp["person_id"]); assert p["name"] == "Marcus" and p["n"] == 1 and sp["kind"] == "new" and not p["is_me"]
+    # ...so a later meeting with that voice names him by itself
+    later = (basis(5) * 0.9 + basis(8) * 0.1).astype(np.float32)
+    assert speakers.match(later, E.db(), include_me=False)[:1] == (sp["person_id"],) and speakers.match(later, E.db(), include_me=False)[2] == "auto"
+    # a person who already has that exact name: link and learn, no second person
+    ok("rename-speaker", str(i_known), "Priya", "--person-id", str(pid), *C(E))
+    assert person(E, pid)["n"] == n0 + 1 and E.meeting({"meeting_id": mid})["speakers"][2]["person_id"] == pid and kinds()[2] == "new"
+    # a plain rename also settles it: the user chose the name, nothing is learned
+    n_people = E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0]
+    ok("rename-speaker", str(i_plain), "Zed Z", *C(E))
+    assert kinds() == ["assumed", "new", "new", "new"] and E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0] == n_people
 
 # ---------- delete / expire-audio safety ----------
 with Env() as E:

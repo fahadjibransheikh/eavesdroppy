@@ -162,6 +162,9 @@ CASES = [
     {"name": "rename_speaker_existing_names", "steps": [
         S("rename-speaker", "2", "Priya"), S("rename-speaker", "2", "Priya", "--new-person"), S("rename-speaker", "6", "Me", "--person-id", "1"),
         S("rename-speaker", "4", "Priya", "--person-id=2")]},
+    # kind "intro" (named from an introduction, unlinked): any rename settles it to "new"; --new-person / --person-id also learn the voice
+    {"name": "rename_speaker_intro", "setup_sql": ["UPDATE speakers SET kind = 'intro', person_id = NULL WHERE id IN (2, 3, 6)"], "steps": [
+        S("rename-speaker", "2", "Marcus", "--new-person"), S("rename-speaker", "3", "Priya", "--person-id", "2"), S("rename-speaker", "6", "Pat")]},
     {"name": "rename_speaker_errors", "steps": [
         S("rename-speaker", "999", "x"), S("rename-speaker", "999", ""), S("rename-speaker", "2", "  "), S("rename-speaker", "2", "x", "--person-id", "2", "--new-person"),
         S("rename-speaker", "2", "x", "--person-id", "999"), S("rename-speaker", "2")]},

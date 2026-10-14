@@ -22,7 +22,8 @@ from the recording start):
   speakers(id, meeting_id, track 'mic'|'system'|'room', cluster, label, person_id -> people, score, kind, embedding,
            suggested_person_id -> people)
       label is what the UI and the Drive files show ("Me", "Priya", "Speaker 2"); kind is free text
-      from speakers.py (e.g. 'me', 'known', 'new', 'room').
+      from speakers.py (e.g. 'me', 'known', 'new', 'room'). 'intro' = named from the meeting's own introductions,
+      not yet confirmed: person_id NULL, never learned; any rename-speaker turns it into 'new'.
       suggested_person_id (v2) the person a kind='suggest' voiceprint match (0.60-0.75 cosine) points at, NULL
       otherwise and for rows from before v2. It is a hint only: person_id stays NULL and the label stays "Speaker n"
       until the user confirms (rename-speaker --person-id). A reader may show "Is this <people.name>?"; ignore it
@@ -379,8 +380,9 @@ def rename_speaker(db, speaker_id, name, person_id=None):
         if not row:
             raise LibraryError(f"no speaker {speaker_id}")
         affected, renamed = {row["meeting_id"]}, [(row["meeting_id"], row["label"])]
-        db.execute("UPDATE speakers SET label = ?, person_id = COALESCE(?, person_id) WHERE id = ?",
-                   (name, person_id, speaker_id))
+        # a rename settles an introduction-named speaker (kind "intro"): the user has now chosen the name
+        db.execute("UPDATE speakers SET label = ?, person_id = COALESCE(?, person_id), kind = CASE WHEN kind = 'intro' THEN 'new' ELSE kind END"
+                   " WHERE id = ?", (name, person_id, speaker_id))
         if person_id is not None:
             for r in db.execute("SELECT id, meeting_id, label FROM speakers WHERE person_id = ? AND label != ?", (person_id, name)).fetchall():
                 db.execute("UPDATE speakers SET label = ? WHERE id = ?", (name, r["id"]))

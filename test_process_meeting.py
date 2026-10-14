@@ -1080,16 +1080,53 @@ with Env() as E:
         os.environ.pop("EAVESDROPPY_LINEAR_KEY", None)
 
 # ---------- enroll / import-drive ----------
+def voice_wav(path, speech_db=-25.0, noise_db=-60.0, overdrive=1.0, rate=16000, seconds=25):
+    """A sample that reads as speech to enroll_quality: five harmonics in 0.6 s bursts every 0.9 s over noise (EnrollQuality's test voice)."""
+    t = np.arange(rate * seconds) / rate
+    a = 10 ** (speech_db / 20) / np.sqrt(2.5)
+    speech = sum(a * np.sin(2 * np.pi * 150 * k * t) for k in range(1, 6)) * ((t % 0.9) < 0.6)
+    noise = np.random.default_rng(7).uniform(-1, 1, len(t)) * 10 ** (noise_db / 20) * np.sqrt(3)
+    sf.write(path, np.clip(speech * overdrive + noise, -1, 1).astype("float32"), rate, subtype="FLOAT")
+    return path
+
+
 with Env() as E:
-    wav = E.container / "me.wav"; sf.write(wav, np.random.default_rng(3).uniform(-0.3, 0.3, 16000 * 2).astype("float32"), 16000)
+    wav = voice_wav(E.container / "me.wav")
     E.fk.diar_calls.clear()
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 12.5, "S1"), (13.0, 14.0, "S2")], "embeddings": {"S1": basis(3), "S2": basis(4)}}
     j, _ = ok("enroll", str(wav), *C(E)); assert sorted(j) == ["person_id", "seconds"] and j["seconds"] == 12.5, j
     p = person(E, j["person_id"]); assert p["is_me"] == 1 and p["name"] == "Me" and np.frombuffer(p["voiceprint"], np.float32)[3] == 1.0
     j2, _ = ok("enroll", str(wav), "--name", "Fahad", *C(E)); assert j2["person_id"] == j["person_id"] and person(E, j["person_id"])["name"] == "Fahad"
+    people = lambda: E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0]
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 4.0, "S1")], "embeddings": {"S1": basis(3)}}
-    fails("enroll", str(wav), *C(E), contains="only 4.0 s of speech")
+    fails("enroll", str(wav), *C(E), contains="Only 4.0 seconds of speech were picked up, and at least 10 are needed. Read the passage steadily and closer to the microphone.")
+    pm.speakers.diarize = lambda p: {"segments": [], "embeddings": {}}
+    fails("enroll", str(wav), *C(E), contains="No speech was picked up. Check that the right microphone is selected, then try again.")
     fails("enroll", str(E.container / "nope.wav"), *C(E), contains="")
+    # quality refusals (same sentences and thresholds as EnrollQuality.swift); nothing is saved
+    before = people()
+    pm.speakers.diarize = lambda p: {"segments": [(0.0, 14.0, "S1"), (14.0, 20.0, "S2")], "embeddings": {"S1": basis(3), "S2": basis(4)}}
+    fails("enroll", str(wav), *C(E), contains="Another voice was picked up (30% of the speech). Record where only you are talking.")
+    pm.speakers.diarize = lambda p: {"segments": [(0.0, 16.0, "S1"), (16.0, 20.0, "S2")], "embeddings": {"S1": basis(3), "S2": basis(4)}}
+    ok("enroll", str(wav), *C(E))  # exactly 20 % is allowed
+    pm.speakers.diarize = lambda p: {"segments": [(0.0, 12.0, "S1")], "embeddings": {"S1": basis(3)}}
+    fails("enroll", str(voice_wav(E.container / "quiet.wav", -55, -80)), *C(E), contains="Too quiet: your voice was recorded at -")
+    fails("enroll", str(voice_wav(E.container / "loud.wav", -12, overdrive=8)), *C(E), contains="Too loud: ")
+    fails("enroll", str(voice_wav(E.container / "noisy.wav", -25, -22)), *C(E), contains="Too much background noise. Move somewhere quieter, or closer to the microphone, and try again.")
+    assert people() == before, "a refused sample saves nothing"
+    # the numbers (EnrollQualityTests.measuresSpeechLevelAndSNRFromTheDominantClusterFrames, same signal): -20 dBFS tone then a -60 dBFS floor
+    n = 16000 * 20; i = np.arange(n)
+    x = np.where(i < n // 2, 0.1 * np.sqrt(2) * np.sin(2 * np.pi * 200 * i / 16000), 0.001 * np.sqrt(2) * np.sin(2 * np.pi * 90 * i / 16000)).astype("float32")
+    q = speakers.enroll_quality(x, [(0.0, 10.0, "S1"), (10.0, 20.0, "S2")], 0.5, 0.0)
+    assert q["dominant"] == "S1" and q["clusters"] == 2 and abs(q["speech_db"] + 20) < 0.1 and abs(q["snr_db"] - 40) < 0.5, q
+    assert abs(q["overall_db"] + 23) < 0.2 and abs(q["other_share"] - 0.5) < 1e-9, q
+    q = speakers.enroll_quality(x, [], 0.5, 0.0); assert q["dominant"] is None and speakers.enroll_rejection(q).startswith("No speech was picked up.")
+    q = {"dominant": "S1", "speech": 12, "other_share": 0.2, "speech_db": -45.0, "clip_fraction": 0.01, "snr_db": 8.0}
+    assert speakers.enroll_rejection(q) is None, "every limit is inclusive"
+    assert speakers.enroll_rejection({**q, "snr_db": None}) is None
+    assert speakers.enroll_rejection({**q, "snr_db": 7.9}).startswith("Too much background noise")
+    assert speakers.enroll_rejection({**q, "clip_fraction": 0.05}) == "Too loud: 5.0% of the recording is distorted. Move back from the microphone or lower its input volume."
+    assert speakers.enroll_rejection({**q, "speech_db": -60.0}) == "Too quiet: your voice was recorded at -60 dB. Move closer to the microphone or raise its input volume."
     # import-drive: legacy folders from the pre-library pipeline; idempotent; counts
     f = E.out_root / "2026-09-01 0900 – Old call"; f.mkdir(parents=True)
     (f / "transcript.md").write_text("# Old call\n\n- **Date:** 2026-09-01 09:00 (UTC+05:00)\n- **Duration:** 01:00\n- **Attendees:** —\n\n---\n\n**[00:00] Me:** hi there\n")
@@ -1140,18 +1177,18 @@ with Env() as E:
         r, _ = ok(str(ses)); m = E.meeting(r)
         assert m["template"] == "general" and "steal me" not in E.fk.prompts() and len(r["warnings"]) == 2 and "Template 'custom' unavailable" in r["warnings"][-1], r
 
-# ---------- F16: enroll cleanup, leading-dash names, voiceprints learn once ----------
+# ---------- F16: enroll keeps the sample, leading-dash names, voiceprints learn once ----------
 with Env() as E:
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 12.5, "S1")], "embeddings": {"S1": basis(3)}}
     (E.container / "enroll").mkdir(); mine = E.container / "enroll" / "me.wav"; other = E.container / "keepme.wav"
-    for w in (mine, other): sf.write(w, np.random.default_rng(3).uniform(-0.3, 0.3, 16000 * 2).astype("float32"), 16000)
-    ok("enroll", str(other), *C(E)); assert other.exists()  # not under <container>/enroll/: left alone
+    for w in (mine, other): voice_wav(w)
+    ok("enroll", str(other), *C(E)); assert other.exists()  # a file the user pointed us at is left alone
     link = E.container / "enroll" / "link.wav"; link.symlink_to(other); ok("enroll", str(link), *C(E)); assert other.exists()  # a link out is not followed
     link.unlink()
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 4.0, "S1")], "embeddings": {"S1": basis(3)}}
-    fails("enroll", str(mine), *C(E), contains="only 4.0 s of speech"); assert mine.exists()  # kept on failure, for a retry
+    fails("enroll", str(mine), *C(E), contains="Only 4.0 seconds of speech"); assert mine.exists()  # kept on failure, for a retry
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 12.5, "S1")], "embeddings": {"S1": basis(3)}}
-    j, _ = ok("enroll", str(mine), "--name=-x", *C(E)); assert not mine.exists() and person(E, j["person_id"])["name"] == "-x", j
+    j, _ = ok("enroll", str(mine), "--name=-x", *C(E)); assert mine.exists() and person(E, j["person_id"])["name"] == "-x", j  # the droplet keeps enroll/last.wav for diagnosis
     fails("enroll", str(other), "--name", "-y", *C(E), contains="bad arguments")  # argparse reads -y as a flag: a clean ERROR, nothing enrolled
     assert person(E, j["person_id"])["name"] == "-x" and E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0] == 1
 

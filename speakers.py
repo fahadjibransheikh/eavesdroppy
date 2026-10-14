@@ -34,6 +34,15 @@ AUTO_THR = 0.75  # >= : name the cluster automatically (and let the print learn,
 SUGGEST_THR = 0.60  # [SUGGEST_THR, AUTO_THR): offer the name; below: new person
 ME_THR = 0.60  # a cluster matching the enrolled Me print at least this well is Me
 MIN_ENROLL_SPEECH = 10.0  # seconds of speech in the dominant cluster
+# Enrollment quality, mirrored in EnrollQuality.swift (same thresholds, same sentences). Calibrated 2026-10-14 on 25 s cuts of an
+# in-person archive: 375 single-speaker windows read speech -35.0..-23.1 dBFS, SNR >= 9.3, one cluster; 39 windows with a second
+# talker split into two clusters whose smaller one held 20..49 % of the speech.
+MAX_OTHER_SHARE = 0.20  # a second cluster with more than this share of all speech: somebody else was talking
+MIN_SPEECH_DB = -45.0  # mean power of the dominant cluster's frames
+MAX_CLIP_FRACTION = 0.01  # native-rate samples at or above CLIP_LEVEL
+CLIP_LEVEL = 0.999
+MIN_SNR_DB = 8.0  # dominant-cluster speech level minus the 10th-percentile 20 ms frame power
+ENROLL_FRAME = 320  # 20 ms at 16 kHz
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS people(
   id INTEGER PRIMARY KEY, name TEXT, email TEXT, is_me INTEGER DEFAULT 0,
@@ -165,23 +174,80 @@ def confirm_speaker(db, person_id, emb):
     update_print(db, person_id, emb, weight=1)
 
 
+def _db(power):
+    return float(10 * np.log10(max(power, 1e-14)))
+
+
+def enroll_quality(x, segments, peak, clip_fraction):
+    """x: 16 kHz mono samples; segments: diarize() segments; peak / clip_fraction: of the file as recorded (native rate, all
+    channels). -> dict: dominant (cluster id or None), clusters, total_speech, speech (dominant cluster, s), other_share
+    (second-largest cluster / total), overall_db, peak_db, speech_db, snr_db (None without frames), clip_fraction."""
+    m = {"dominant": None, "clusters": 0, "total_speech": 0.0, "speech": 0.0, "other_share": 0.0, "overall_db": -140.0,
+         "peak_db": float(20 * np.log10(max(peak, 1e-7))), "speech_db": -140.0, "snr_db": None, "clip_fraction": float(clip_fraction)}
+    secs = speech_seconds(segments)
+    m["clusters"], m["total_speech"] = len(secs), sum(secs.values())
+    if not secs:
+        return m
+    cid = max(secs, key=secs.get)  # first of equals
+    m["dominant"], m["speech"] = cid, secs[cid]
+    m["other_share"] = max((v for c, v in secs.items() if c != cid), default=0.0) / m["total_speech"] if m["total_speech"] > 0 else 0.0
+    n = len(x) // ENROLL_FRAME
+    if n == 0:
+        return m
+    power = (np.asarray(x[: n * ENROLL_FRAME], dtype=np.float64).reshape(n, ENROLL_FRAME) ** 2).mean(1)
+    m["overall_db"] = _db(power.mean())
+    step = ENROLL_FRAME / 16000
+    t0 = np.arange(n) * step
+    t1 = t0 + step
+    inside = np.zeros(n, bool)
+    for s0, e0, c in segments:
+        if c == cid:
+            inside |= (t0 >= s0) & (t1 <= e0)
+    m["speech_db"] = _db(power[inside].mean() if inside.any() else power.mean())
+    m["snr_db"] = m["speech_db"] - _db(np.percentile(power, 10))
+    return m
+
+
+def enroll_rejection(m, min_speech=MIN_ENROLL_SPEECH):
+    """The reason to refuse this sample, in the words the Speakers page shows; None when it is good. Checked in this order."""
+    if m["dominant"] is None:
+        return "No speech was picked up. Check that the right microphone is selected, then try again."
+    if m["speech"] < min_speech:
+        return (f"Only {m['speech']:.1f} seconds of speech were picked up, and at least {min_speech:.0f} are needed. "
+                "Read the passage steadily and closer to the microphone.")
+    if m["other_share"] > MAX_OTHER_SHARE:
+        return f"Another voice was picked up ({int(m['other_share'] * 100 + 0.5)}% of the speech). Record where only you are talking."
+    if m["speech_db"] < MIN_SPEECH_DB:
+        return f"Too quiet: your voice was recorded at {m['speech_db']:.0f} dB. Move closer to the microphone or raise its input volume."
+    if m["clip_fraction"] > MAX_CLIP_FRACTION:
+        return f"Too loud: {m['clip_fraction'] * 100:.1f}% of the recording is distorted. Move back from the microphone or lower its input volume."
+    if m["snr_db"] is not None and m["snr_db"] < MIN_SNR_DB:
+        return "Too much background noise. Move somewhere quieter, or closer to the microphone, and try again."
+    return None
+
+
 def enroll_me(db, wav_path, name="Me", report=None):
     """Diarize a single-speaker sample (>= MIN_ENROLL_SPEECH s of speech; if several clusters appear the dominant
-    one is used) and store it as the is_me person, replacing any earlier Me print. Returns the person id;
-    a `report` dict, if given, receives {"seconds": speech seconds of the dominant cluster}."""
+    one is used) and store it as the is_me person, replacing any earlier Me print. enroll_rejection() refuses a sample
+    with another voice in it, or one too quiet, too loud or too noisy (ValueError with its sentence; nothing is stored).
+    Returns the person id; a `report` dict, if given, receives {"seconds": speech seconds of the dominant cluster,
+    "quality": enroll_quality()}."""
+    native, _ = sf.read(wav_path, dtype="float32", always_2d=True)
+    x = load16k(wav_path)
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "enroll.wav"
-        sf.write(p, load16k(wav_path), 16000)  # any rate/channels -> 16 kHz mono
+        sf.write(p, x, 16000)  # any rate/channels -> 16 kHz mono
         r = diarize(p)
-    secs = speech_seconds(r["segments"])
-    if not secs:
-        raise ValueError("enrollment sample has no detectable speech")
-    cid = max(secs, key=secs.get)
-    if secs[cid] < MIN_ENROLL_SPEECH:
-        raise ValueError(f"enrollment sample has only {secs[cid]:.1f} s of speech; need {MIN_ENROLL_SPEECH:.0f} s")
+    q = enroll_quality(x, r["segments"], float(np.abs(native).max()) if native.size else 0.0,
+                       float((np.abs(native) >= CLIP_LEVEL).mean()) if native.size else 0.0)
+    why = enroll_rejection(q)
+    if why:
+        raise ValueError(why)
+    cid = q["dominant"]
     emb = r["embeddings"][cid]
     if report is not None:
-        report["seconds"] = round(secs[cid], 1)
+        report["seconds"] = round(q["speech"], 1)
+        report["quality"] = q
     with _conn(db) as c:
         row = c.execute("SELECT id FROM people WHERE is_me = 1 ORDER BY id LIMIT 1").fetchone()
         if row:

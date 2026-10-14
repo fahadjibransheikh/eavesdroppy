@@ -1013,14 +1013,12 @@ def cmd_linear_export(a):
 
 def cmd_enroll(a):
     report = {}
-    with library_db(a.container) as (db, container):
+    with library_db(a.container) as (db, _):
         try:
             pid = speakers.enroll_me(db, a.wav, a.name, report=report)
         except (ValueError, RuntimeError, OSError) as e:  # the sample stays, so the user can retry
             raise Fail(str(e))
-        if under(a.wav, [container / "enroll"]):  # the droplet's own recording; never delete a file the user pointed us at
-            with contextlib.suppress(OSError):
-                Path(a.wav).unlink(missing_ok=True)
+    # the sample stays (the droplet keeps enroll/last.wav for diagnosis), whoever recorded it
     return {"person_id": pid, "seconds": report["seconds"]}
 
 

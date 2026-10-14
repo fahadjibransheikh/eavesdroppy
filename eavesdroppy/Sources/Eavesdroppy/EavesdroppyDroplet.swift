@@ -37,6 +37,18 @@ let noCallAudio = "No call audio. Allow Droppy in Screen & System Audio Recordin
 private let silentCallAudioGrace = 60
 func callAudioMissing(elapsed: Int, frames: Int64) -> Bool { elapsed >= silentCallAudioGrace && frames == 0 }
 
+/// The permission warning needs a call: an in-person meeting plays nothing through the Mac, so a quiet call-audio track is
+/// the right answer there. Only a call app using the microphone makes "no call audio" a problem.
+func shouldWarnNoCallAudio(callApps: [String], elapsed: Int, frames: Int64) -> Bool {
+    !callApps.isEmpty && callAudioMissing(elapsed: elapsed, frames: frames)
+}
+
+/// "call" when a call app used the microphone at any time, or the call-audio track carried sustained signal (at least 30 s
+/// and a fifth of the recording: a notification or a video in the room is a few seconds); otherwise "in_person".
+func recordingSetting(callApps: [String], systemSignalSeconds: Double, duration: Double) -> String {
+    !callApps.isEmpty || systemSignalSeconds >= max(30, duration * 0.2) ? "call" : "in_person"
+}
+
 /// "12:34", and "1:15:12" from one hour on (the wing and the shelf header both show it).
 func clockText(_ seconds: Int) -> String {
     let s = max(seconds, 0), h = s / 3600, m = s % 3600 / 60
@@ -180,6 +192,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private func finishRecording(_ rec: Recorder, _ s: (dir: URL, title: String, attendees: [String], start: Date), then done: (@MainActor (RecResult) -> Void)? = nil) {
         notesWork?.cancel(); notesWork = nil
         let notes = notesText, template = recordingTemplate, names = automation.participantSnapshot
+        let callApps = automation.callAppsSeen, seconds = Date().timeIntervalSince(s.start)
         let autoNaming = prefs.autoNaming, customText = prefs.customTemplate
         audioQ.async {
             let r = rec.stop()
@@ -188,6 +201,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             if template == "custom" { extra["custom_template_file"] = Prefs.customTemplateFile.path; extra["custom_template"] = customText }
             extra["auto_naming"] = autoNaming
             if !names.isEmpty { extra["participants"] = names }  // Accessibility reader (D18): naming candidates beside the attendees
+            let setting = recordingSetting(callApps: callApps, systemSignalSeconds: r.systemSignalSeconds, duration: seconds)
+            extra["setting"] = setting  // "in_person" skips echo removal and the assumed "Me"; see process_meeting.py
+            if !callApps.isEmpty { extra["call_apps"] = callApps }
+            log("setting: \(setting) callApps=\(callApps) systemSignal=\(String(format: "%.0f", r.systemSignalSeconds)) s of \(String(format: "%.0f", seconds)) s")
             notesQ.sync { writeNotes(notes, in: s.dir) }
             if !notes.isEmpty { extra["user_notes_file"] = "notes.txt" }
             do { try writeMeta(dir: s.dir, title: s.title, start: s.start, attendees: s.attendees, source: "record", offsets: r.offsets, extra: extra) }
@@ -308,7 +325,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         session = (dir, title, attendees, start)
         phase = .recording
         elapsed = 0; systemChecked = false
-        warnings = rec.systemWarning == nil ? [] : [noCallAudio]
+        warnings = []  // a tap that could not start counts as silence: tick() warns once a call app is using the mic
         log("recording started: \(title) -> \(dir.path)")
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in MainActor.assumeIsolated { self.tick() } }
         publishActivity()
@@ -323,8 +340,9 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private func tick() {
         guard let s = session else { return }
         elapsed = Int(Date().timeIntervalSince(s.start))
-        // No call audio at all after a full minute: the permission is almost certainly off.
-        if !systemChecked, let st = recorder?.system, callAudioMissing(elapsed: elapsed, frames: st.frames) {
+        // A call app is using the mic and no call audio at all after a full minute: the permission is almost certainly off.
+        // Never in person: a quiet system track is the right answer when nobody is on a call.
+        if !systemChecked, shouldWarnNoCallAudio(callApps: automation.callAppsSeen, elapsed: elapsed, frames: recorder?.system?.frames ?? 0) {
             systemChecked = true
             addWarning(noCallAudio)
         }
@@ -353,11 +371,12 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         phase = .stopping
         timer?.invalidate(); timer = nil
         let epoch = currentEpoch()
+        let callApps = automation.callAppsSeen
         finishRecording(rec, s) { r in
             guard epoch == currentEpoch() else { return }
-            let sysDown = rec.systemWarning != nil
+            let warned = self.callAudioProblem  // already told, live
             self.endSession()
-            if r.systemSilent && !sysDown {
+            if r.systemSilent && !callApps.isEmpty && !warned {
                 self.notify("No call audio was recorded", symbol: "exclamationmark.triangle.fill", detail: "Allow Droppy in Screen & System Audio Recording, then record again.")
             }
             if process { self.enqueue(s.dir, title: s.title) } else { self.refreshFailed() }
@@ -726,11 +745,12 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         library.demoRecents([m(1, "Weekly sync", 3600, 2), m(2, "1:1 with Priya", 86_400 + 3600, 0), m(3, "Roadmap planning", 4 * 86_400, 1)])
     }
 
-    /// Harness only (EAVESDROPPY_HARNESS_DEMO=recording): a recording on screen with no audio behind it.
-    func demoRecording() {
+    /// Harness only (EAVESDROPPY_HARNESS_DEMO=recording): a call recording with no call audio behind it, so the warning shows.
+    /// `inperson`: the same recording with nobody on a call, which shows no warning.
+    func demoRecording(inPerson: Bool = false) {
         session = (sessionsDir.appendingPathComponent("demo"), "Weekly sync", ["Priya Nair", "Sam Lee"], Date().addingTimeInterval(-754))
         phase = .recording; elapsed = 754
-        warnings = [noCallAudio]
+        warnings = inPerson ? [] : [noCallAudio]
     }
 }
 

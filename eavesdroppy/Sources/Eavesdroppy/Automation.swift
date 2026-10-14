@@ -32,6 +32,7 @@ import SwiftUI
     private var countdownEnd: Date?
     private var sampling = false, scanning = false
     private var participants: [String] = []
+    private var callApps: [String] = []        // every call app seen using the mic during this recording, in order of first sight
 
     private var prefs: Prefs { droplet.prefs }
     private var host: DropletHost? { droplet.host }
@@ -246,7 +247,7 @@ import SwiftUI
 
     func recordingStarted() {
         armed = false; lastCall = Date(); keepRecording = false; countdownEnd = nil; sampling = false; scanning = false
-        participants = []
+        participants = []; callApps = []
         if micSessionActive { micPrompted = true }
         if prompt.active { dismissPrompt() }
     }
@@ -258,6 +259,10 @@ import SwiftUI
 
     /// The names the Accessibility reader has collected during this recording.
     var participantSnapshot: [String] { participants }
+
+    /// The call apps that used the microphone at any time during this recording (sampled every 5 s with the auto-stop check).
+    /// Empty means "in person" as far as anyone can tell: nothing a call app does reached the mic.
+    var callAppsSeen: [String] { callApps }
 
     /// Once a second while recording.
     func tick(elapsed: Int) {
@@ -288,6 +293,7 @@ import SwiftUI
 
     private func sampled(_ apps: [String]) {
         guard droplet.recording else { return }
+        for a in apps where !callApps.contains(a) { callApps.append(a) }
         if !apps.isEmpty {
             armed = true; lastCall = Date()
             if countdownEnd != nil { cancelCountdown() }  // the call is back

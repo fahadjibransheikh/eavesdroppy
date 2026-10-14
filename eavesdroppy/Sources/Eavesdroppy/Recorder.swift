@@ -18,6 +18,7 @@ final class TrackWriter {
     private var _firstHost: UInt64 = 0
     private var _peak: Float = 0
     private var _frames: Int64 = 0
+    private var _signalSeconds = 0.0
     private var failed = false
     private var warnedDrop = false
     private let isLazy: Bool
@@ -30,6 +31,9 @@ final class TrackWriter {
     var firstHost: UInt64 { lock.withLock { _firstHost } }
     var peak: Float { lock.withLock { _peak } }
     var frames: Int64 { lock.withLock { _frames } }
+    /// Seconds of audio in buffers that peaked at `signalLevel` or more: -60 dBFS, well above a tap's dither and any quiet room tone.
+    var signalSeconds: Double { lock.withLock { _signalSeconds } }
+    static let signalLevel: Float = 1e-3
 
     init(url: URL, format: AVAudioFormat) throws {
         self.url = url; isLazy = false
@@ -65,11 +69,16 @@ final class TrackWriter {
             return
         }
         if _firstHost == 0 { _firstHost = host != 0 ? host : mach_absolute_time() }
+        var bufPeak: Float = 0
         if let ch = buf.floatChannelData {
             let n = Int(buf.frameLength), s = buf.stride
-            for c in 0..<Int(buf.format.channelCount) { for i in 0..<n { _peak = max(_peak, abs(ch[c][i * s])) } }
+            for c in 0..<Int(buf.format.channelCount) { for i in 0..<n { bufPeak = max(bufPeak, abs(ch[c][i * s])) } }
+            _peak = max(_peak, bufPeak)
         }
-        do { try file.write(from: buf); _frames += Int64(buf.frameLength) } catch {
+        do {
+            try file.write(from: buf); _frames += Int64(buf.frameLength)
+            if bufPeak >= Self.signalLevel, buf.format.sampleRate > 0 { _signalSeconds += Double(buf.frameLength) / buf.format.sampleRate }
+        } catch {
             failed = true
             log("ERROR writing \(url.lastPathComponent): \(error)")
             onError?("could not write \(url.lastPathComponent): \(error.localizedDescription)")
@@ -118,6 +127,8 @@ struct RecResult {
     var offsets: [String: Double]
     /// The call-audio track was captured but empty or all zeros: almost always a missing permission.
     var systemSilent: Bool
+    /// Seconds of real signal on the call-audio track (0 when there is none). A silent room never reaches it; a call does.
+    var systemSignalSeconds: Double
 }
 
 /// Confined to audioQ (the few cross-thread reads go through TrackWriter's lock), hence @unchecked.
@@ -332,13 +343,14 @@ final class Recorder: @unchecked Sendable {
         teardownTap()
         mic?.close(); system?.close()
         var offsets: [String: Double] = [:]
-        var silent = false
+        var silent = false, signal = 0.0
         for (name, w) in [("mic", mic), ("system", system)] {
             guard let w else { continue }
             if name == "system" && w.frames == 0 {  // never got a buffer: omit the track rather than hand over an empty wav
                 log("WARNING system track received no audio; omitting system.wav")
                 try? FileManager.default.removeItem(at: w.url); system = nil; silent = true; continue
             }
+            if name == "system" { signal = w.signalSeconds }
             let off = w.firstHost == 0 ? 0 : max(0, hostSeconds(w.firstHost) - hostSeconds(startHost))
             offsets[name] = off
             log("stopped \(name): offset=\(String(format: "%.3f", off))s frames=\(w.frames) peak=\(String(format: "%.4f", w.peak))")
@@ -347,6 +359,6 @@ final class Recorder: @unchecked Sendable {
                 if name == "system" { silent = true }
             }
         }
-        return RecResult(offsets: offsets, systemSilent: silent)
+        return RecResult(offsets: offsets, systemSilent: silent, systemSignalSeconds: signal)
     }
 }

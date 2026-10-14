@@ -225,6 +225,7 @@ extension EavesdroppyDroplet {
             case "stopped": notify("Recording stopped", symbol: "exclamationmark.triangle.fill", detail: "The disk is full. What was captured is saved under Failed.", priority: .high)
             case "consent": notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")
             case "recording": demoRecording()
+            case "inperson": demoRecording(inPerson: true)
             case "rows": demoRows()
             case "link": library.exportLink = ("Open ENG-142 in Linear", URL(string: "https://linear.app/example/issue/ENG-142")!)
             default: automation.demo(what)

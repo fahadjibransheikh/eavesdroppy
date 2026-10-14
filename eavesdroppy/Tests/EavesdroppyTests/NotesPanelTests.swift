@@ -11,6 +11,24 @@ import Testing
         #expect(!callAudioMissing(elapsed: 300, frames: 1))  // the tap woke up late and recorded fine
     }
 
+    @Test func noCallAudioWarningNeedsACallApp() {
+        #expect(!shouldWarnNoCallAudio(callApps: [], elapsed: 600, frames: 0))  // in person: nothing plays, nothing to warn about
+        #expect(!shouldWarnNoCallAudio(callApps: ["Zoom"], elapsed: 59, frames: 0))
+        #expect(shouldWarnNoCallAudio(callApps: ["Zoom"], elapsed: 60, frames: 0))
+        #expect(!shouldWarnNoCallAudio(callApps: ["Zoom"], elapsed: 600, frames: 48_000))
+    }
+
+    @Test func settingIsCallOnlyWithACallAppOrSustainedSignal() {
+        #expect(recordingSetting(callApps: ["Zoom"], systemSignalSeconds: 0, duration: 3000) == "call")
+        // Today's in-person recordings: 156 s and 34 s of notification blips and clips in ~50 and ~65 minutes.
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 156, duration: 3048) == "in_person")
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 34, duration: 3932) == "in_person")
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 0, duration: 3000) == "in_person")
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 900, duration: 3000) == "call")  // a call the app list missed
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 40, duration: 100) == "call")   // short call: a fifth of it, over 30 s
+        #expect(recordingSetting(callApps: [], systemSignalSeconds: 20, duration: 60) == "in_person")
+    }
+
     @Test func savedFrameIsKeptOnlyWhileReachable() {
         let screens = [NSRect(x: 0, y: 0, width: 1440, height: 900)]
         let ok = NotesPanelController.restoredFrame(NSStringFromRect(NSRect(x: 900, y: 500, width: 420, height: 340)), screens: screens)

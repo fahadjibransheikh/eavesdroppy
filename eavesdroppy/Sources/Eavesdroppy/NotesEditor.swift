@@ -37,3 +37,26 @@ struct TemplateMenu: View {
         .accessibilityLabel("Notes template")
     }
 }
+
+/// Which speech engine and language this meeting is transcribed with; defaults to the setting, switchable while recording.
+struct LanguageMenu: View {
+    @ObservedObject var droplet: EavesdroppyDroplet
+
+    var body: some View {
+        Menu {
+            ForEach(MeetingLanguage.allCases, id: \.self) { l in
+                Button { droplet.recordingLanguage = l } label: {
+                    if droplet.recordingLanguage == l { Label(l.title, systemImage: "checkmark") } else { Text(l.title) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "globe").font(.system(size: 10, weight: .medium))
+                Text(droplet.recordingLanguage.title).font(.system(size: 11, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+        }
+        .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
+        .accessibilityLabel("Meeting language")
+    }
+}

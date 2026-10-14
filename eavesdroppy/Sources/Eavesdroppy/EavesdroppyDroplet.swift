@@ -131,6 +131,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     /// Typed notes for the recording in progress; saved to <session>/notes.txt 1 s after the last keystroke.
     @Published var notesText = "" { didSet { if notesText != oldValue { notesEdited() } } }
     @Published var recordingTemplate = "general"
+    @Published var recordingLanguage = MeetingLanguage.auto
     /// Set by startRecording for the next didStart: the consent line is shown for an automatic start whatever the setting.
     private var startedAutomatically = false
     /// Folder -> library id of meetings processed this session, so a Recent row opens the meeting in the library.
@@ -197,13 +198,13 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     /// runs because of a deactivation the recording is saved and shows up under Failed for retry.
     private func finishRecording(_ rec: Recorder, _ s: (dir: URL, title: String, attendees: [String], start: Date), then done: (@MainActor (RecResult) -> Void)? = nil) {
         notesWork?.cancel(); notesWork = nil
-        let notes = notesText, template = recordingTemplate, names = automation.participantSnapshot
+        let notes = notesText, template = recordingTemplate, language = recordingLanguage, names = automation.participantSnapshot
         let callApps = automation.callAppsSeen, seconds = Date().timeIntervalSince(s.start)
         let autoNaming = prefs.autoNaming, customText = prefs.customTemplate
         audioQ.async {
             let r = rec.stop()
             // meta.json learns the chosen template and the typed notes file (queued debounced writes land first).
-            var extra: [String: Any] = ["template": template]
+            var extra: [String: Any] = ["template": template, "language": language.rawValue]
             if template == "custom" { extra["custom_template_file"] = Prefs.customTemplateFile.path; extra["custom_template"] = customText }
             extra["auto_naming"] = autoNaming
             if !names.isEmpty { extra["participants"] = names }  // Accessibility reader (D18): naming candidates beside the attendees
@@ -327,7 +328,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             return
         }
         recorder = rec
-        notesText = ""; recordingTemplate = prefs.defaultTemplate
+        notesText = ""; recordingTemplate = prefs.defaultTemplate; recordingLanguage = prefs.meetingLanguage
         session = (dir, title, attendees, start)
         phase = .recording
         elapsed = 0; systemChecked = false

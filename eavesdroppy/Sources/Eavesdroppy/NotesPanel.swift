@@ -134,6 +134,7 @@ struct NotesPanelView: View {
                 Text(droplet.clock).font(.system(size: 12, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
                 Spacer(minLength: 0)
+                LanguageMenu(droplet: droplet)
                 TemplateMenu(droplet: droplet)
                 Button("Stop") { droplet.stopRecording(process: true) }
                     .buttonStyle(DroppyAccentButtonStyle(color: StateColor.destructive, size: .small))

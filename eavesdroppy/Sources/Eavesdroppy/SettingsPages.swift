@@ -38,7 +38,8 @@ extension EavesdroppyDroplet: SettingsPagesProviding {
     }
 
     public var settingsSearchEntries: [SettingsSearchEntry] {
-        [SettingsSearchEntry(title: "Echo removal", keywords: ["microphone", "recording", "speakers"]),
+        [SettingsSearchEntry(title: "Meeting language", keywords: ["urdu", "hindi", "english", "transcription", "speech", "apple", "parakeet", "roman"]),
+         SettingsSearchEntry(title: "Echo removal", keywords: ["microphone", "recording", "speakers"]),
          SettingsSearchEntry(title: "Consent reminder", keywords: ["recording"]),
          SettingsSearchEntry(title: "Open the notes window when recording starts", keywords: ["recording", "typed notes", "window"]),
          SettingsSearchEntry(title: "Auto-stop", keywords: ["recording", "call ends"]),
@@ -98,6 +99,13 @@ private struct RecordingPage: View {
     var body: some View {
         DropletSettingsPage {
             DropletSettingsCard {
+                DropletGroupedPickerRow(title: "Meeting language",
+                                        subtitle: "Auto listens to the start of each meeting and uses Apple's speech recognition when it hears Urdu or Hindi mixed with English, Parakeet otherwise. Urdu and Hindi are always written in Latin letters. You can change it per meeting from the notes window.") {
+                    Picker("", selection: prefs.binding(Prefs.Key.meetingLanguage, MeetingLanguage.auto.rawValue)) {
+                        ForEach(MeetingLanguage.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().pickerStyle(.menu)
+                }
                 DropletToggleRow(title: "Remove echo from your microphone",
                                  subtitle: "Cancels call audio that leaks from your speakers into the mic. Turn it off if your own voice sounds clipped.",
                                  isOn: prefs.binding(Prefs.Key.echoRemoval, true))

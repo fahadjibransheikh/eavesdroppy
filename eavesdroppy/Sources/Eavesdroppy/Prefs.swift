@@ -36,6 +36,8 @@ enum NoteTemplate {
     var openNotesOnRecord: Bool { pref(Key.openNotesOnRecord, true) }
     var autoStop: Bool { pref(Key.autoStop, true) }
     var micPrompt: Bool { pref(Key.micPrompt, true) }
+    /// Which speech engine and language the next recordings are transcribed with (D33). A recording can override it from the notes window.
+    var meetingLanguage: MeetingLanguage { MeetingLanguage.parse(pref(Key.meetingLanguage, MeetingLanguage.auto.rawValue)) }
     // Speakers
     var autoNaming: Bool { pref(Key.voiceprintNaming, true) }
     var participantNames: Bool { pref(Key.participantNames, false) }
@@ -63,7 +65,7 @@ enum NoteTemplate {
         static let userName = "userName", voiceprintNaming = "voiceprintNaming"
         static let defaultTemplate = "defaultTemplate", customTemplate = "customTemplate"
         static let calendarPrompt = "calendarPrompt", calendarAutoStart = "calendarAutoStart"
-        static let micPrompt = "micPrompt", participantNames = "participantNames"
+        static let micPrompt = "micPrompt", participantNames = "participantNames", meetingLanguage = "meetingLanguage"
         static let remindersList = "remindersList", linearTeamID = "linearTeamID", linearTeamName = "linearTeamName"
         static let retentionDays = "retentionDays", lastExpire = "lastExpire", lastVoiceNotice = "lastVoiceNotice", outputFolder = "outputFolder", usePython = "usePythonPipeline"
     }
@@ -71,7 +73,8 @@ enum NoteTemplate {
     /// meta.json keys the pipeline reads (contract: echo_removal, template, retention_days, auto_naming, user_name).
     var metaExtras: [String: Any] {
         var m: [String: Any] = ["echo_removal": echoRemoval, "template": defaultTemplate, "retention_days": retentionDays,
-                                "auto_naming": autoNaming, "user_name": userName]  // "Your name": the pipeline writes it into prompts and naming
+                                "auto_naming": autoNaming, "user_name": userName,
+                                "language": meetingLanguage.rawValue]  // "Your name": the pipeline writes it into prompts and naming
         if defaultTemplate == "custom" {
             m["custom_template_file"] = Self.customTemplateFile.path
             m["custom_template"] = customTemplate  // process_meeting.py reads the inline text, not the file (integration check, 2026-10-12)

@@ -221,6 +221,7 @@ extension EavesdroppyDroplet {
                 openLibrary()
             case "olddroplet": notify("Remove the old Meetings droplet", symbol: "exclamationmark.triangle.fill",
                                       detail: "In Settings › Store › Local droplets. Eavesdroppy replaces it, and two recorders would both offer to start.")
+            case "voicenotice": showVoiceNotice()
             case "notesready": notify("Notes ready", symbol: "checkmark.circle.fill", detail: "Weekly sync", action: ("Open", {}))
             case "stopped": notify("Recording stopped", symbol: "exclamationmark.triangle.fill", detail: "The disk is full. What was captured is saved under Failed.", priority: .high)
             case "consent": notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")

@@ -65,7 +65,7 @@ enum NoteTemplate {
         static let calendarPrompt = "calendarPrompt", calendarAutoStart = "calendarAutoStart"
         static let micPrompt = "micPrompt", participantNames = "participantNames"
         static let remindersList = "remindersList", linearTeamID = "linearTeamID", linearTeamName = "linearTeamName"
-        static let retentionDays = "retentionDays", lastExpire = "lastExpire", outputFolder = "outputFolder", usePython = "usePythonPipeline"
+        static let retentionDays = "retentionDays", lastExpire = "lastExpire", lastVoiceNotice = "lastVoiceNotice", outputFolder = "outputFolder", usePython = "usePythonPipeline"
     }
 
     /// meta.json keys the pipeline reads (contract: echo_removal, template, retention_days, auto_naming, user_name).

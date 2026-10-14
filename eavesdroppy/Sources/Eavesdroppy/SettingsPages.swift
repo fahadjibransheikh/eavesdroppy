@@ -8,6 +8,14 @@ private enum PageID {
     static let recording = "recording", speakers = "speakers", notes = "notes", providers = "providers", calendar = "calendar", output = "output", storage = "storage"
 }
 
+extension EavesdroppyDroplet {
+    /// Settings, Speakers: where "Record your voice" lives. A host that cannot open one of the droplet's pages opens its Settings.
+    func openSpeakersSettings() {
+        guard let w = host?.workspace else { return }
+        if !w.openSettingsPage(PageID.speakers, title: "Speakers") { _ = w.openSettings() }
+    }
+}
+
 extension EavesdroppyDroplet: SettingsPagesProviding {
     public func makeSettingsPane(context: SettingsPaneContext) -> AnyView {
         // Harness only: EAVESDROPPY_HARNESS_PAGE=calendar shows that page in the settings-pane shot.

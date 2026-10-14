@@ -49,6 +49,12 @@ func recordingSetting(callApps: [String], systemSignalSeconds: Double, duration:
     !callApps.isEmpty || systemSignalSeconds >= max(30, duration * 0.2) ? "call" : "in_person"
 }
 
+/// The "record your voice" nudge: after an in-person meeting, while no voiceprint of the user exists, and at most once a day.
+/// In person everyone is on the mic track, so without a voiceprint the user cannot be told from the room.
+func shouldShowVoiceNotice(inPerson: Bool, meSamples: Int, lastShown: Double, now: Double) -> Bool {
+    inPerson && meSamples <= 0 && now - lastShown >= 86_400
+}
+
 /// "12:34", and "1:15:12" from one hour on (the wing and the shelf header both show it).
 func clockText(_ seconds: Int) -> String {
     let s = max(seconds, 0), h = s / 3600, m = s % 3600 / 60
@@ -516,10 +522,11 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         if !pending.contains(where: { $0.dir == dir }) { pending.append(Job(dir: dir, title: title)) }
         refreshFailed()
         let epoch = currentEpoch()
+        let inPerson = metaSetting(dir) == "in_person"  // read now: the session folder is gone once the notes are written
         work.async {
             guard currentEpoch() == epoch else { return }  // deactivated while queued
             let r = processSession(dir, epoch: epoch, stage: { s in onMain { self.setStage(dir, s, epoch) } })
-            onMain { self.finished(dir, title, r, epoch) }
+            onMain { self.finished(dir, title, r, epoch, inPerson: inPerson) }
         }
     }
 
@@ -528,7 +535,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         pending[i].stage = stage
     }
 
-    private func finished(_ dir: URL, _ title: String, _ r: Outcome, _ epoch: Int) {
+    private func finished(_ dir: URL, _ title: String, _ r: Outcome, _ epoch: Int, inPerson: Bool) {
         guard epoch == currentEpoch(), host != nil else { return }  // deactivated meanwhile
         pending.removeAll { $0.dir == dir }
         switch r {
@@ -538,12 +545,34 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             notify("Notes ready", symbol: warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                    detail: warnings.isEmpty ? title : "\(title). \(warnings.joined(separator: " "))",
                    action: ("Open", { [weak self] in self?.openNotes(folder) }))
+            if inPerson { scheduleVoiceNotice(epoch) }
         case .failed(let why):
             // The shelf keeps its own Retry for this; a HUD button is unverified in a real Droppy.
             notify("Couldn't write notes", symbol: "exclamationmark.triangle.fill", detail: "\(title): \(why)",
                    action: ("Retry", { [weak self] in self?.retry(dir) }))
         }
         refreshFailed()
+    }
+
+    /// Once the "Notes ready" card is gone (they share the HUD slot): ask the user to record their voice. It is not marked as
+    /// shown unless the HUD took it, and never while a recording is on.
+    private func scheduleVoiceNotice(_ epoch: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 11) {
+            MainActor.assumeIsolated {
+                guard epoch == currentEpoch(), self.host != nil, !self.recording else { return }
+                let now = Date().timeIntervalSince1970
+                guard shouldShowVoiceNotice(inPerson: true, meSamples: self.library.me?.samples ?? 0,
+                                            lastShown: self.prefs.pref(Prefs.Key.lastVoiceNotice, 0.0), now: now) else { return }
+                if self.showVoiceNotice() { self.prefs.set(Prefs.Key.lastVoiceNotice, now) }
+            }
+        }
+    }
+
+    @discardableResult
+    func showVoiceNotice() -> Bool {
+        notify("Record your voice so Eavesdroppy can tell you apart", symbol: "person.wave.2.fill",
+               detail: "In person, your voice and the room's sound alike to it. A 25-second sample fixes that.",
+               action: ("Open Settings", { [weak self] in self?.openSpeakersSettings() }))
     }
 
     func retry(_ d: URL) {

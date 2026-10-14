@@ -29,6 +29,15 @@ import Testing
         #expect(recordingSetting(callApps: [], systemSignalSeconds: 20, duration: 60) == "in_person")
     }
 
+    @Test func voiceNoticeOnlyAfterAnInPersonMeetingWithoutAVoiceprintOncePerDay() {
+        let day = 86_400.0, now = 1_800_000_000.0
+        #expect(shouldShowVoiceNotice(inPerson: true, meSamples: 0, lastShown: 0, now: now))
+        #expect(!shouldShowVoiceNotice(inPerson: false, meSamples: 0, lastShown: 0, now: now))  // a call: the mic is the user alone
+        #expect(!shouldShowVoiceNotice(inPerson: true, meSamples: 1, lastShown: 0, now: now))   // already enrolled
+        #expect(!shouldShowVoiceNotice(inPerson: true, meSamples: 0, lastShown: now - day + 1, now: now))
+        #expect(shouldShowVoiceNotice(inPerson: true, meSamples: 0, lastShown: now - day, now: now))
+    }
+
     @Test func savedFrameIsKeptOnlyWhileReachable() {
         let screens = [NSRect(x: 0, y: 0, width: 1440, height: 900)]
         let ok = NotesPanelController.restoredFrame(NSStringFromRect(NSRect(x: 900, y: 500, width: 420, height: 340)), screens: screens)

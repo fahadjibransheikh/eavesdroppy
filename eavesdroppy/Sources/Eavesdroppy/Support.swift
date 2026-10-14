@@ -86,10 +86,15 @@ func writeNotes(_ text: String, in dir: URL) {
     do { try Data(text.utf8).write(to: url, options: .atomic) } catch { log("ERROR writing notes.txt: \(error)") }
 }
 
-func metaTitle(_ dir: URL) -> String? {
+func metaTitle(_ dir: URL) -> String? { metaString(dir, "title") }
+
+/// "call" or "in_person" once the recorder has stopped; nil for a recording that predates the field.
+func metaSetting(_ dir: URL) -> String? { metaString(dir, "setting") }
+
+private func metaString(_ dir: URL, _ key: String) -> String? {
     guard let d = try? Data(contentsOf: dir.appendingPathComponent("meta.json")),
           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
-    return j["title"] as? String
+    return j[key] as? String
 }
 
 /// The pipeline's last "ERROR: ..." stderr line from the session's process.log, without the prefix.

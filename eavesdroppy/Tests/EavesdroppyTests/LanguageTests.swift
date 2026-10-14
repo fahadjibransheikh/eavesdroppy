@@ -260,6 +260,7 @@ private func scalarsIn(_ s: String) -> Bool { RomanScript.needsTransliteration(s
         #expect(processingStage(afterLog: "Detecting language") == "Detecting language")
         #expect(processingStage(afterLog: "Downloading speech model… 42 %") == "Downloading speech model… 42 %")
         #expect(processingStage(afterLog: "Speech model ready") == "Transcribing")
+        #expect(processingStage(afterLog: "Transcribing with Apple (mul_IN)") == "Transcribing", "the row leaves 'Detecting language' when the real transcription starts")
         #expect(processingStage(afterLog: "stage echo done at +1.0 s") == "Transcribing")
     }
 }

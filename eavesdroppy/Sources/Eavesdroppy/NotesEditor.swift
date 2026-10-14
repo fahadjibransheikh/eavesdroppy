@@ -52,7 +52,7 @@ struct LanguageMenu: View {
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "globe").font(.system(size: 10, weight: .medium))
-                Text(droplet.recordingLanguage.title).font(.system(size: 11, weight: .medium))
+                Text(droplet.recordingLanguage.shortTitle).font(.system(size: 11, weight: .medium))
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
             }
         }

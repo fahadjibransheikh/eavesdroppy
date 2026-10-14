@@ -333,7 +333,7 @@ enum NativeSeams {
 func processingStage(afterLog line: String) -> String? {
     if line == "Detecting language" { return "Detecting language" }
     if line.hasPrefix("Downloading speech model") { return line }   // with its progress; the first meeting on a Mac downloads 639 MB
-    if line == "Speech model ready" { return "Transcribing" }
+    if line == "Speech model ready" || line.hasPrefix("Transcribing with ") { return "Transcribing" }   // after detection or a download, until the stage line
     guard line.hasPrefix("stage "), let end = line.range(of: " done at") else { return nil }
     switch line[line.index(line.startIndex, offsetBy: 6)..<end.lowerBound] {
     case "track prep": return "Cleaning up audio"

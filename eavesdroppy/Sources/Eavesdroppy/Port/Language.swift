@@ -16,6 +16,9 @@ enum MeetingLanguage: String, CaseIterable {
         }
     }
 
+    /// The notes-window button's label: the menu items keep the full titles.
+    var shortTitle: String { self == .mixed ? "Urdu/Hindi" : title }
+
     /// A missing or unknown value is Auto (recordings made before the setting existed).
     static func parse(_ raw: Any?) -> MeetingLanguage { (raw as? String).flatMap(MeetingLanguage.init(rawValue:)) ?? .auto }
 }

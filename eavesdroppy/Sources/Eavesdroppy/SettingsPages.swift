@@ -100,7 +100,7 @@ private struct RecordingPage: View {
         DropletSettingsPage {
             DropletSettingsCard {
                 DropletGroupedPickerRow(title: "Meeting language",
-                                        subtitle: "Auto listens to the start of each meeting and uses Apple's speech recognition when it hears Urdu or Hindi mixed with English, Parakeet otherwise. Urdu and Hindi are always written in Latin letters. You can change it per meeting from the notes window.") {
+                                        subtitle: "Auto listens to the start of each meeting and uses Apple's speech recognition when it hears Urdu or Hindi mixed with English, and the English engine otherwise. Urdu and Hindi are always written in Latin letters. You can change it per meeting from the notes window.") {
                     Picker("", selection: prefs.binding(Prefs.Key.meetingLanguage, MeetingLanguage.auto.rawValue)) {
                         ForEach(MeetingLanguage.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
                     }

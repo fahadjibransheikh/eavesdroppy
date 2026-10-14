@@ -66,7 +66,7 @@ private final class Lines: @unchecked Sendable {
         #expect(sp[0].text(0) == "Speaker 1" && sp[0].text(1) == "new", "\(sp)")   // the mic cluster is not "Me" by assumption
         let notes = try String(contentsOfFile: r.folder + "/notes.md", encoding: .utf8), transcript = try String(contentsOfFile: r.folder + "/transcript.md", encoding: .utf8)
         #expect(notes.contains("- **Attendees:** Alice Jones\n- **Setting:** In person\n"), Comment(rawValue: notes))
-        #expect(transcript.contains("- **Setting:** In person\n\n---"))
+        #expect(transcript.contains("- **Setting:** In person\n- **Language:** English (Parakeet)\n\n---"))
         #expect(!notes.contains("**Me:**"))
     }
 

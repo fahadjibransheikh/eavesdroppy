@@ -2,7 +2,8 @@ import Foundation
 
 // Engine seam (research/swift-port-plan.md, D21/D22/D27). The pipeline talks to these protocols only; the
 // FluidAudio and LocalVQE implementations are compiled in by the personal build (EAVESDROPPY_PERSONAL=1). A Store
-// build gets the stubs at the bottom, which throw `EngineError.unavailable`.
+// build gets the stubs at the bottom, which throw `EngineError.unavailable`. Apple's SpeechTranscriber (EngineApple.swift)
+// is a system framework and is in both builds; the Store build's only speech engine.
 
 /// One recognised word. Same shape as the dicts `process_meeting.transcribe` returns.
 public struct EngineWord: Equatable, Sendable, Codable {
@@ -94,6 +95,19 @@ public struct UnavailableEchoRemover: EchoRemover {
 
 /// The engines for this build.
 public enum Engine {
+    /// Parakeet and the diarizer come with FluidAudio, which only the personal build links.
+    public static let hasParakeet: Bool = {
+        #if canImport(FluidAudio)
+        return true
+        #else
+        return false
+        #endif
+    }()
+    public static var hasDiarizer: Bool { hasParakeet }
+
+    /// Apple's SpeechTranscriber for a locale ("mul_IN", "en_US"); `log` receives the model-download progress.
+    static func apple(locale: String, log: @escaping @Sendable (String) -> Void) -> any Transcriber { AppleTranscriber(locale: locale, log: log) }
+
     public static func transcriber(modelDir: URL? = nil) -> any Transcriber {
         #if canImport(FluidAudio)
         return FluidTranscriber(modelDir: modelDir)

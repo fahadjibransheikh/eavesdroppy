@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -19,6 +20,36 @@ enum ProcessorAudio {
             try out.write(from: b)
             i += n
         }
+    }
+
+    /// The first `seconds` of voiced audio of a 16 kHz mono file, as a 16-bit WAV: the 0.5 s windows louder than a tenth of the
+    /// track's 90th-percentile level, joined in order (a call's mic track is mostly the other side's silence). Returns the
+    /// excerpt's length in seconds; 0 when nothing is voiced, and then no file is written.
+    // shortcut: a level gate, not a voice detector; a track that is all steady noise yields noise, which transcribes to few words
+    static func speechExcerpt(_ src: URL, to dst: URL, seconds: Double) throws -> Double {
+        let win = 8000   // 0.5 s at 16 kHz
+        let f = try AVAudioFile(forReading: src)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(win)) else { throw EngineError.failed("out of memory") }
+        var level: [Float] = []
+        while f.framePosition < f.length {
+            try Task.checkCancellation()
+            try f.read(into: buf, frameCount: AVAudioFrameCount(win))
+            let n = Int(buf.frameLength)
+            if n == 0 { break }
+            level.append(vDSP.rootMeanSquare(UnsafeBufferPointer(start: buf.floatChannelData![0], count: n)))
+        }
+        guard !level.isEmpty else { return 0 }
+        let gate = max(5e-4, level.sorted()[Int(Double(level.count - 1) * 0.9)] * 0.1)
+        let voiced = level.indices.filter { level[$0] > gate }.prefix(Int((seconds * 2).rounded(.up)))
+        var out: [Float] = []
+        for w in voiced {
+            f.framePosition = AVAudioFramePosition(w * win)
+            try f.read(into: buf, frameCount: AVAudioFrameCount(win))
+            out += UnsafeBufferPointer(start: buf.floatChannelData![0], count: Int(buf.frameLength))
+        }
+        guard !out.isEmpty else { return 0 }
+        try writeMono16(out, rate: 16_000, to: dst)
+        return Double(out.count) / 16_000
     }
 
     /// Mono 16-bit PCM WAV as soundfile writes it from floats: x * 32767, rounded, clipped.
@@ -114,7 +145,9 @@ enum ProcessorAudio {
 
     /// `keep_raw`: archive the raw tracks as 24-bit FLAC beside the sessions dir (<container>/raw/<session>/), plus meta.json,
     /// since the recorder deletes the session dir once processing succeeds. A track that cannot be encoded is copied as is.
-    static func keepRaw(session: URL, files: [(key: String, url: URL)], log: (String) -> Void = { _ in }) throws -> URL {
+    /// `extraMeta` is merged into the archive's copy of meta.json (the engine and language the meeting was transcribed with);
+    /// the session's own meta.json is left as it was.
+    static func keepRaw(session: URL, files: [(key: String, url: URL)], extraMeta: [String: Any] = [:], log: (String) -> Void = { _ in }) throws -> URL {
         let fm = FileManager.default
         let dst = session.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("raw").appendingPathComponent(session.lastPathComponent)
         try fm.createDirectory(at: dst, withIntermediateDirectories: true)
@@ -145,6 +178,11 @@ enum ProcessorAudio {
         let meta = dst.appendingPathComponent("meta.json")
         try? fm.removeItem(at: meta)
         try fm.copyItem(at: session.appendingPathComponent("meta.json"), to: meta)
+        if !extraMeta.isEmpty {
+            var m = (try JSONSerialization.jsonObject(with: Data(contentsOf: meta)) as? [String: Any]) ?? [:]
+            for (k, v) in extraMeta { m[k] = v }
+            try JSONSerialization.data(withJSONObject: m, options: [.prettyPrinted, .sortedKeys]).write(to: meta, options: .atomic)
+        }
         return dst
     }
 }

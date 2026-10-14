@@ -190,6 +190,14 @@ enum StoreImport {
         return (title, start, dur, attendees, parseTurns(body))
     }
 
+    /// The Setting and Language bullets sit under Attendees in the header; they are not part of the notes (the mirror writes them back from the raw archive or the old file).
+    // Divergence from library.py, which leaves them in the notes text: it never imported a header that had them without duplicating them on the next render.
+    private static func dropHeaderBullets(_ s: String) -> String {
+        var lines = s.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline })
+        while let f = lines.first, f.hasPrefix("- **Setting:** ") || f.hasPrefix("- **Language:** ") { lines.removeFirst() }
+        return PyText.strip(lines.joined(separator: "\n"))
+    }
+
     private static func pySorted(_ names: [String]) -> [String] {
         names.sorted { Array($0.unicodeScalars.map(\.value)).lexicographicallyPrecedes(Array($1.unicodeScalars.map(\.value))) }
     }
@@ -215,7 +223,7 @@ enum StoreImport {
                 let notesMD: String
                 if let (a, _) = att {  // head[att.end():].strip(); att.end() is an offset in `ntext`, which `head` is a prefix of
                     let end = a.range.location + a.range.length
-                    notesMD = PyText.strip(end <= (head as NSString).length ? (head as NSString).substring(from: end) : "")
+                    notesMD = dropHeaderBullets(PyText.strip(end <= (head as NSString).length ? (head as NSString).substring(from: end) : ""))
                 } else { notesMD = "" }
                 let status = notesMD.contains("Summary failed") ? "failed" : (notesMD.isEmpty ? "none" : "ok")
                 var parsed: (title: String, start: String, duration: Double, attendees: [String], turns: [ParsedTurn])

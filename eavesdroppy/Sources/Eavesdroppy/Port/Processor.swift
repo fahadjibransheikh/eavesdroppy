@@ -19,6 +19,11 @@ enum Processor {
         var echoRemover: () -> any EchoRemover = { Engine.echoRemover() }
         var linkModel: (URL) -> URL? = { EngineVocab.linkDroppyModel(into: $0) }
         var droppyVocab: () -> [String] = { EngineVocab.loadDroppyVocab() }
+        /// Apple's SpeechTranscriber for a locale; the closure gets the pipeline log (model-download progress).
+        var apple: (String, @escaping @Sendable (String) -> Void) -> any Transcriber = { Engine.apple(locale: $0, log: $1) }
+        var availability = { EngineAvailability(parakeet: Engine.hasParakeet, apple: AppleTranscriber.isAvailable) }
+        /// False in the Store build: no diarizer, so each track is one speaker.
+        var hasDiarizer = Engine.hasDiarizer
     }
 
     struct Params {
@@ -143,6 +148,38 @@ enum Processor {
         return EchoOutcome(bleed: true, mic: out, dedup: false)
     }
 
+    // MARK: language
+
+    /// The one engine for every track of this meeting (D33): the setting in meta.json, and for Auto a pre-pass with Apple mul_IN over
+    /// the first 180 s of speech of each track, scored by `LanguageDetector`. Throws a readable error when no engine can run.
+    static func chooseEngine(_ p: Params, meta: [String: Any], tracks: [(key: String, url: URL)], tmp: URL, warnings: inout [String]) async throws -> EngineChoice {
+        let avail = p.engines.availability()
+        switch try Routing.plan(MeetingLanguage.parse(meta["language"]), avail, warnings: &warnings) {
+        case .fixed(let c): return c
+        case .detect:
+            p.log("Detecting language")
+            var texts: [String] = []
+            do {
+                let apple = p.engines.apple(Routing.mixedLocale, p.log)
+                for (key, url) in tracks {
+                    try Task.checkCancellation()
+                    let excerpt = tmp.appendingPathComponent("detect-\(key).wav")
+                    guard try ProcessorAudio.speechExcerpt(url, to: excerpt, seconds: LanguageDetector.excerptSeconds) > 0 else { continue }
+                    texts += try await apple.transcribe(excerpt, hotwords: [], names: []).words.map(\.text)
+                }
+            } catch is CancellationError { throw CancellationError()
+            } catch {
+                let why = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                guard avail.parakeet else { throw error }
+                warnings.append("Language detection failed (\(why)); used the English engine")
+                return try Routing.english(avail, "language detection failed")
+            }
+            let d = LanguageDetector.share(of: texts)
+            p.log("Language detection: \(String(format: "%.1f", d.share * 100)) % function words over \(d.tokens) words (threshold \(String(format: "%.1f", LanguageDetector.threshold * 100)) %)")
+            return try Routing.resolve(share: d.share, tokens: d.tokens, avail)
+        }
+    }
+
     // MARK: notes
 
     /// generate_and_store. Returns the warning to show ("Summary failed: ...", or the provider status text) or nil. On failure the transcript is untouched;
@@ -239,13 +276,10 @@ enum Processor {
             if PyPath.exists(session.appendingPathComponent("system.wav").path) { files.append(("system", session.appendingPathComponent("system.wav"))) }
         }
 
-        let modelDir = p.engines.linkModel(URL(fileURLWithPath: container).appendingPathComponent("models/parakeet-tdt-0.6b-v3"))
-        p.log(modelDir.map { "Using Droppy's Parakeet model via \($0.path)" } ?? "Droppy's Parakeet model not found; FluidAudio will use its own cache")
         let droppy = p.engines.droppyVocab()
         let hot = EngineVocab.buildHotwords(attendees: attendees, vocabLines: droppy)
         let droppyKeys = Set(droppy.map { PyText.strip($0.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)[0].description).lowercased() })
         let att = EngineVocab.attendeeNames(attendees).filter { !droppyKeys.contains($0.lowercased()) }   // a name the dictionary has keeps its looser matching
-        p.log("Custom vocabulary (\(hot.count)): \(String(hot.joined(separator: ", ").prefix(300)))")
 
         var prepped: [String: EngineAudio.Track] = [:], w16: [(key: String, url: URL)] = []
         var failures: [String] = []
@@ -286,17 +320,33 @@ enum Processor {
         }
 
         mark("echo")
+        let choice = try await chooseEngine(p, meta: meta, tracks: w16.map { ($0.key, src[$0.key]!) }, tmp: tmp, warnings: &warnings)
+        p.log("Language: \(choice.label) (\(choice.reason))")
+        let transcriber: any Transcriber
+        if choice.engine == .apple {
+            transcriber = p.engines.apple(choice.locale ?? Routing.mixedLocale, p.log)
+        } else {
+            let modelDir = p.engines.linkModel(URL(fileURLWithPath: container).appendingPathComponent("models/parakeet-tdt-0.6b-v3"))
+            p.log(modelDir.map { "Using Droppy's Parakeet model via \($0.path)" } ?? "Droppy's Parakeet model not found; FluidAudio will use its own cache")
+            p.log("Custom vocabulary (\(hot.count)): \(String(hot.joined(separator: ", ").prefix(300)))")
+            transcriber = p.engines.transcriber(modelDir)
+        }
+        transcriberBox.value = transcriber
+        p.log("Transcribing with \(choice.engine == .apple ? "Apple (\(choice.locale ?? ""))" : "Parakeet")")
         var words: [(track: String, words: [Turns.Word])] = []
-        let transcriber = p.engines.transcriber(modelDir); transcriberBox.value = transcriber
+        var romanized = 0, wordTotal = 0
         for (key, _) in w16 {
             try Task.checkCancellation()
             do {
                 let res = try await transcriber.transcribe(src[key]!, hotwords: hot, names: Set(att))
-                words.append((key, res.words.map { Turns.Word(text: $0.text, start: $0.start, end: $0.end) }))
+                let latin = RomanScript.enforce(res.words)   // Urdu/Hindi is always written in Latin letters
+                romanized += latin.count; wordTotal += latin.words.count
+                words.append((key, latin.words.map { Turns.Word(text: $0.text, start: $0.start, end: $0.end) }))
                 duration = max(duration, (trackOff[key] ?? 0.0) + res.durationSeconds)
             } catch is CancellationError { throw CancellationError()
             } catch { failures.append("\(names[key]!) track transcription failed (\((error as? LocalizedError)?.errorDescription ?? "\(error)"))") }
         }
+        p.log("Roman script: \(romanized) of \(wordTotal) words transliterated to Latin")
         if failures.count == files.count { throw StoreError(failures.joined(separator: "; ")) }
         warnings += failures + echoWarnings   // some tracks failed, others carried the meeting
         mark("transcription")
@@ -312,7 +362,8 @@ enum Processor {
 
         var diar: [String: Voiceprints.Diarization] = [:]
         let diarizer = p.engines.diarizer(); diarizerBox.value = diarizer
-        for (key, ws) in words where !ws.isEmpty {
+        if !p.engines.hasDiarizer { p.log("Speaker separation: not available in this build; each track is one speaker") }
+        for (key, ws) in words where !ws.isEmpty && p.engines.hasDiarizer {
             try Task.checkCancellation()
             do { diar[key] = Self.voiceprintDiarization(try await diarizer.diarize(src[key]!)) }
             catch is CancellationError { throw CancellationError() }
@@ -357,7 +408,7 @@ enum Processor {
             try ProcessorAudio.mixToM4A(tracks: mixTracks, offsets: mixOffsets, dst: audioTmp, tmp: tmp)
         }
         mark("mix")
-        let rawDir = try ProcessorAudio.keepRaw(session: session, files: files, log: p.log).path   // before the rename: a failure here leaves no half-made meeting folder
+        let rawDir = try ProcessorAudio.keepRaw(session: session, files: files, extraMeta: choice.meta, log: p.log).path   // before the rename: a failure here leaves no half-made meeting folder
         mark("raw archive")
 
         // a killed earlier run of this session left a meeting without a folder: replace it, don't duplicate it.

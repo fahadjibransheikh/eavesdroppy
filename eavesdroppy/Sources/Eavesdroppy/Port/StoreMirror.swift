@@ -84,6 +84,8 @@ enum StoreMirror {
         var folder: String?, audioPath: String?, turns: [Turn]
         /// The Setting text when the caller already knows it; else it is read from the raw archive's meta.json (no schema column).
         var setting: String? = nil, rawDir: String? = nil
+        /// The Language text ("Urdu/Hindi + English (Apple)") when known; else read from the raw archive's meta.json like `setting`.
+        var language: String? = nil
     }
 
     static func fmtTS(_ sec: Double) -> String {
@@ -126,6 +128,7 @@ enum StoreMirror {
         var lines = ["# \(m.title)", "", "- **Date:** \(p.date) \(p.hm) (UTC\(p.offset))", "- **Duration:** \(fmtTS(m.duration))",
                      "- **Attendees:** \(m.attendees.isEmpty ? "—" : m.attendees.joined(separator: ", "))"]
         if let s = meetingSetting(m) { lines.append("- **Setting:** \(s)") }   // recordings made before the field existed have none
+        if let l = meetingLanguage(m) { lines.append("- **Language:** \(l)") }   // so do meetings transcribed before the engine was recorded
         return lines.joined(separator: "\n")
     }
 
@@ -148,13 +151,25 @@ enum StoreMirror {
         return settingText(o)
     }
 
+    /// `meetingSetting` for the Language line: m.language, else `transcript_language` in the raw archive's meta.json.
+    static func meetingLanguage(_ m: Meeting) -> String? {
+        if let s = m.language, !s.isEmpty { return s }
+        guard let raw = m.rawDir, !raw.isEmpty, let d = try? Data(contentsOf: URL(fileURLWithPath: raw + "/meta.json")),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let l = o["transcript_language"] as? String, !l.isEmpty else { return nil }
+        return l
+    }
+
     /// The Setting line of an existing notes.md header block (title, blank line, bullets), so a re-render keeps it after the raw audio expired.
-    static func keptSetting(_ notesPath: String) -> String? {
+    static func keptSetting(_ notesPath: String) -> String? { keptLine("Setting", notesPath) }
+
+    /// The `- **<label>:** ` bullet of an existing notes.md header block; same purpose as `keptSetting`, for the Language line.
+    static func keptLine(_ label: String, _ notesPath: String) -> String? {
         guard let t = try? String(contentsOfFile: notesPath, encoding: .utf8) else { return nil }
         let blocks = t.components(separatedBy: "\n\n")
         guard blocks.count > 2 else { return nil }
-        for l in blocks[1].components(separatedBy: "\n") where l.hasPrefix("- **Setting:** ") {
-            return PyText.strip(String(l.dropFirst("- **Setting:** ".count)))
+        let prefix = "- **\(label):** "
+        for l in blocks[1].components(separatedBy: "\n") where l.hasPrefix(prefix) {
+            return PyText.strip(String(l.dropFirst(prefix.count)))
         }
         return nil
     }
@@ -223,6 +238,7 @@ enum StoreMirror {
             audio = new
         }
         if meetingSetting(m) == nil { m.setting = keptSetting(PyPath.join(folder, "notes.md")) }   // raw audio expired: keep the line the file has
+        if meetingLanguage(m) == nil { m.language = keptLine("Language", PyPath.join(folder, "notes.md")) }
         try writeAtomic(PyPath.join(folder, "transcript.md"), try renderTranscript(m))
         try writeAtomic(PyPath.join(folder, "notes.md"), try renderNotes(m))
         return (folder, audio)

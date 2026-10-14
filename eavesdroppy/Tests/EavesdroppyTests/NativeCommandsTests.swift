@@ -98,6 +98,20 @@ private func db(_ s: Scratch) throws -> StoreDB { try StoreDB(path: s.container.
         #expect(try String(contentsOfFile: r.folder + "/notes.md", encoding: .utf8) == before)
     }
 
+    @Test func importDriveKeepsTheSettingAndLanguageLinesOutOfTheNotes() async throws {
+        let s = try Scratch(meta: ["setting": "call", "call_apps": ["Zoom"], "language": "mixed"]); defer { s.remove() }
+        let r = try await processed(s)
+        let before = try String(contentsOfFile: r.folder + "/notes.md", encoding: .utf8)
+        #expect(before.contains("- **Setting:** Call (Zoom)\n- **Language:** Urdu/Hindi + English (Apple)\n"))
+        try FileManager.default.removeItem(at: s.container.appendingPathComponent("library.db"))
+        for ext in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: s.container.path + "/library.db" + ext) }
+        try FileManager.default.removeItem(at: s.container.appendingPathComponent("raw"))   // the raw archive is gone: the lines can only come from the old file
+        #expect(try json(try await NativeCommands.run(["import-drive"], ctx(s)))["imported"] as? Int == 1)
+        let d = try db(s); defer { d.close() }
+        try StoreMirror.sync(d, [1], outRoot: s.out.path) { _ in }
+        #expect(try String(contentsOfFile: r.folder + "/notes.md", encoding: .utf8) == before)
+    }
+
     @Test func importDriveReportsAFolderItCannotParse() async throws {
         let s = try Scratch(); defer { s.remove() }
         try FileManager.default.createDirectory(atPath: s.out.path + "/bad", withIntermediateDirectories: true)

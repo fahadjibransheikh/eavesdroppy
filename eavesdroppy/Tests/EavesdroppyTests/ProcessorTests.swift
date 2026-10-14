@@ -23,6 +23,18 @@ struct FakeTranscriber: Transcriber {
     func unload() async {}
 }
 
+/// Stands in for Apple's SpeechTranscriber: says `text` on every track and remembers which locale it was made for.
+struct FakeApple: Transcriber {
+    var locale = "mul_IN"
+    var text = "hello there everyone this is the apple track speaking clearly"
+    static let urdu = String(repeating: "yeh meeting ka agenda hai aur hum sab ko kal tak kaam karna hai ", count: 3)   // past LanguageDetector.minTokens
+    func transcribe(_ audio: URL, hotwords: [String], names: Set<String>) async throws -> EngineTranscript {
+        let ws = text.split(separator: " ").enumerated().map { EngineWord(text: String($1), start: 0.2 + Double($0) * 0.2, end: 0.35 + Double($0) * 0.2) }
+        return EngineTranscript(words: ws, durationSeconds: 3)
+    }
+    func unload() async {}
+}
+
 struct FakeDiarizer: Diarizer {
     func diarize(_ audio: URL) async throws -> EngineDiarization {
         let v = [Float](repeating: 0, count: 255) + [1]
@@ -62,14 +74,17 @@ struct Scratch {
         try ProcessorAudio.writeMonoFloat(x, rate: 48_000, to: url)
     }
 
-    static func fakeEngines(_ transcriber: any Transcriber = FakeTranscriber()) -> Processor.Engines {
+    /// Both engines and a diarizer are available whatever the build, so the routing tests see the same thing in the personal and the Store build.
+    static func fakeEngines(_ transcriber: any Transcriber = FakeTranscriber(), apple: @escaping (String) -> any Transcriber = { FakeApple(locale: $0) },
+                            availability: EngineAvailability = EngineAvailability(parakeet: true, apple: true), hasDiarizer: Bool = true) -> Processor.Engines {
         Processor.Engines(transcriber: { _ in transcriber }, diarizer: { FakeDiarizer() }, echoRemover: { UnavailableEchoRemoverStub() },
-                          linkModel: { _ in nil }, droppyVocab: { [] })
+                          linkModel: { _ in nil }, droppyVocab: { [] }, apple: { loc, _ in apple(loc) }, availability: { availability }, hasDiarizer: hasDiarizer)
     }
 
-    func params(transcriber: any Transcriber = FakeTranscriber(), resolution: NotesProviders.Resolution = .provider(FixedProvider())) -> Processor.Params {
+    func params(transcriber: any Transcriber = FakeTranscriber(), engines: Processor.Engines? = nil,
+                resolution: NotesProviders.Resolution = .provider(FixedProvider())) -> Processor.Params {
         var p = Processor.Params(session: session, container: container, outRoot: out.path, userName: nil, resolution: resolution)
-        p.engines = Self.fakeEngines(transcriber)
+        p.engines = engines ?? Self.fakeEngines(transcriber)
         p.crashAt = nil
         return p
     }

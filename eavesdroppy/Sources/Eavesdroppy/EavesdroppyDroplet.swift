@@ -450,6 +450,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     // MARK: library surface and settings
 
+    func openSettingsPane() { _ = host?.workspace.openSettings() }
+
     func openLibrary() {
         presentation = host?.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
         // Droppy refuses the surface for some approved local builds ("does not publish a surface with that id"): the
@@ -1042,42 +1044,25 @@ extension EavesdroppyDroplet: MenuBarExtraProviding {
 private struct MenuBarContent: View {
     @ObservedObject var droplet: EavesdroppyDroplet
 
+    // Droppy hosts this inside a real NSMenu, so rows mimic native menu items (plain text, hover highlight)
+    // rather than the shelf's glass buttons, which read as bordered chips in a menu.
     var body: some View {
-        VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+        VStack(alignment: .leading, spacing: 0) {
             if let s = droplet.session {
-                Text("\(s.title) · \(droplet.clock)").font(.system(size: 11)).monospacedDigit().lineLimit(1)
-                    .foregroundStyle(AdaptiveColors.primaryTextAuto.opacity(0.7))
-                    .padding(.horizontal, DroppySpacing.xs)
-                Button { droplet.showNotes() } label: { row("Open notes") }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                Button { droplet.stopRecording(process: true) } label: { row("Stop") }
-                    .buttonStyle(DroppyAccentButtonStyle(color: StateColor.destructive, size: .small))
-                    .disabled(droplet.busy)
-                Button { droplet.discard() } label: { row(droplet.confirmingDiscard ? "Confirm discard" : "Discard") }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: droplet.confirmingDiscard))
-                    .disabled(droplet.busy)
+                MenuInfoRow(text: "\(s.title) · \(droplet.clock)", warn: false)
+                MenuRow(title: "Open notes") { droplet.showNotes() }
+                MenuRow(title: "Stop", disabled: droplet.busy) { droplet.stopRecording(process: true) }
             } else {
-                Button { droplet.startRecording() } label: { row("Record") }
-                    .buttonStyle(DroppyAccentButtonStyle(size: .small))
-                    .disabled(droplet.busy)
-                Button { droplet.openLibrary() } label: { row("Open meetings") }
-                    .buttonStyle(DroppyQuietButtonStyle(size: .small))
-                if let status {
-                    Text(status.text).font(.system(size: 11)).lineLimit(1)
-                        .foregroundStyle(status.warn ? StateColor.warning : AdaptiveColors.primaryTextAuto.opacity(0.7))
-                        .padding(.horizontal, DroppySpacing.xs)
-                }
+                MenuRow(title: "Record", disabled: droplet.busy) { droplet.startRecording() }
+                MenuRow(title: "Open meetings") { droplet.openLibrary() }
+                if let status { MenuInfoRow(text: status.text, warn: status.warn) }
+                else { MenuRow(title: "Settings…") { droplet.openSettingsPane() } }
             }
         }
-        .foregroundStyle(AdaptiveColors.primaryTextAuto)
-        .padding(.vertical, DroppySpacing.xs)
-        // Droppy sizes the menu once, at mount, and never re-measures: both states must share one size or one gets clipped.
-        // The taller state (recording: a status line and three buttons) sets the height.
-        .frame(width: 220, height: 128, alignment: .topLeading)
+        .padding(5)
+        // Droppy sizes the menu once, at mount, and never re-measures: both states have exactly three rows.
+        .frame(width: 220, height: 3 * MenuRow.height + 10, alignment: .topLeading)
     }
-
-    /// The whole row is the hit target, not the shrink-wrapped label.
-    private func row(_ title: String) -> some View { Text(title).frame(maxWidth: .infinity, alignment: .leading) }
 
     private var status: (text: String, warn: Bool)? {
         if let p = droplet.permissionProblem { return (p, true) }
@@ -1085,6 +1070,39 @@ private struct MenuBarContent: View {
         if !droplet.pending.isEmpty { return ("Processing \(droplet.pending.count)…", false) }
         if !droplet.failed.isEmpty { return ("\(droplet.failed.count) failed — open meetings to retry", true) }
         return nil
+    }
+}
+
+private struct MenuRow: View {
+    static let height: CGFloat = 22
+    let title: String
+    var disabled = false
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(.system(size: 13))
+                .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .leading)
+                .padding(.horizontal, 9)
+                .foregroundStyle(hover && !disabled ? Color.white : AdaptiveColors.primaryTextAuto.opacity(disabled ? 0.35 : 1))
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hover && !disabled ? Color.accentColor : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { hover = $0 }
+    }
+}
+
+private struct MenuInfoRow: View {
+    let text: String
+    let warn: Bool
+    var body: some View {
+        Text(text).font(.system(size: 12)).monospacedDigit().lineLimit(1)
+            .foregroundStyle(warn ? StateColor.warning : AdaptiveColors.primaryTextAuto.opacity(0.55))
+            .frame(maxWidth: .infinity, minHeight: MenuRow.height, alignment: .leading)
+            .padding(.horizontal, 9)
     }
 }
 

@@ -9,6 +9,7 @@ import Testing
 //     + EAVESDROPPY_REAL_CONTAINER=<container> EAVESDROPPY_REAL_OUT=<output folder>   instead: the session (already inside
 //       <container>/sessions) is processed in place into the real library and folder, with the user's notes provider (as the droplet does)
 //   EAVESDROPPY_REAL_CMD="delete 2" + the two above   one StoreCommands subcommand on the real library (delete, rename-meeting ...)
+//   EAVESDROPPY_EMBED_WAVS=a.wav,b.wav EAVESDROPPY_EMBED_OUT=<json>     speaker embedding of each wav by the enrollment path and by the meeting path
 //   EAVESDROPPY_DETECT_WAVS=a.wav,b.wav                                  language-detection score of each 16 kHz mono wav
 //   EAVESDROPPY_CANCEL_WAV=<16 kHz mono wav, 1+ min>                    cancels Apple's transcription after 1 s and times how long it takes to stop
 //   EAVESDROPPY_COMPARE_WAV=<16 kHz mono wav> EAVESDROPPY_COMPARE_OUT=<dir>   words of mul_IN, en_US (and Parakeet) as text files
@@ -58,6 +59,37 @@ private let env = ProcessInfo.processInfo.environment
         let data = try StoreCommands.run(cmd.split(separator: " ").map(String.init), container: URL(fileURLWithPath: c), outRoot: URL(fileURLWithPath: out),
                                          warn: { print("REAL warn: \($0)") })
         print("REAL cmd \(cmd): \(String(decoding: data, as: UTF8.self))")
+    }
+
+    /// Speaker embedding of each wav by the enrollment path (Echo.load16k, writeMono16) and by the meeting path (prepareTrack, to16kWav),
+    /// dominant cluster of each, as JSON in EAVESDROPPY_EMBED_OUT.
+    @Test func embedWavsBothWays() async throws {
+        guard let list = env["EAVESDROPPY_EMBED_WAVS"], let out = env["EAVESDROPPY_EMBED_OUT"] else { return }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("embed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        func dominant(_ r: EngineDiarization) -> (secs: Double, emb: [Float])? {
+            var secs: [String: Double] = [:]
+            for s in r.segments { secs[s.cluster, default: 0] += s.end - s.start }
+            guard let c = secs.max(by: { $0.value < $1.value })?.key, let e = r.embeddings[c] else { return nil }
+            return (secs[c]!, e)
+        }
+        var result: [String: Any] = [:]
+        for path in list.split(separator: ",").map(String.init) {
+            let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            let d = Engine.diarizer()
+            let a = tmp.appendingPathComponent("\(name)-enroll.wav")
+            try ProcessorAudio.writeMono16(try Echo.load16k(URL(fileURLWithPath: path)), rate: 16_000, to: a)
+            let ea = dominant(try await d.diarize(a))
+            let tr = try EngineAudio.prepareTrack(key: name, src: URL(fileURLWithPath: path), tmp: tmp)
+            let b = tmp.appendingPathComponent("\(name)-meeting.wav")
+            try EngineAudio.to16kWav(tr.mono, b)
+            let eb = dominant(try await d.diarize(b))
+            await d.unload()
+            result[name] = ["enroll": ea?.emb ?? [], "enroll_secs": ea?.secs ?? 0, "meeting": eb?.emb ?? [], "meeting_secs": eb?.secs ?? 0]
+            print("REAL embed \(name): enroll \(ea?.secs ?? 0) s, meeting \(eb?.secs ?? 0) s")
+        }
+        try JSONSerialization.data(withJSONObject: result).write(to: URL(fileURLWithPath: out))
     }
 
     @Test func scoreLanguageDetectionOfWavs() async throws {

@@ -112,7 +112,8 @@ import Testing
 
     @Test func parseNamingReplyMatchesPython() throws {
         for c in try F.json("voiceprints")["parse_reply"] as! [[String: Any]] {
-            let got = V.parseNamingReply(c["text"] as! String, allowed: c["allowed"] as? [String]).map { [$0.key, $0.name] }
+            let snippets = (c["snippets"] != nil) ? Dictionary(uniqueKeysWithValues: F.pairs(c["snippets"]).map { ($0.0, $0.1 as! [String]) }) : nil
+            let got = V.parseNamingReply(c["text"] as! String, allowed: c["allowed"] as? [String], snippets: snippets).map { [$0.key, $0.name] }
             #expect(got == (c["expected"] as! [[String]]), Comment(rawValue: c["name"] as! String))
         }
     }
@@ -120,7 +121,7 @@ import Testing
     @Test func applyNamesMatchesPython() throws {
         for c in try F.json("voiceprints")["apply_names"] as! [[String: Any]] {
             let names = F.pairs(c["names"]).map { (key: $0.0, name: $0.1 as! String) }
-            same(V.applyNames((c["clusters"] as! [Any]).map(rec), names), (c["expected"] as! [Any]).map(rec), "apply_names")
+            same(V.applyNames((c["clusters"] as! [Any]).map(rec), names, allowed: c["allowed"] as? [String]), (c["expected"] as! [Any]).map(rec), "apply_names")
         }
     }
 
@@ -145,7 +146,7 @@ import Testing
             #expect(a.turns == turns, Comment(rawValue: "\(name): turns"))
             if !a.prompt.isEmpty, let reply = c["reply"] as? String {
                 prompts += 1
-                a.recs = Turns.applyNaming(a.recs, reply: reply, allowed: a.candidates)
+                a.recs = Turns.applyNaming(a.recs, reply: reply, allowed: a.candidates, snippets: a.snippets)
             }
             same(a.recs, (want["recs"] as! [Any]).map(rec), name)
         }

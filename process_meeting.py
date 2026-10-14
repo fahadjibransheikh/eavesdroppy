@@ -449,6 +449,7 @@ def drop_user(attendees, names):
 
 
 def naming_snippets(recs, turns, n=10, chars=240):
+    """The first `n` turns of each cluster, in time order: introductions come at the start of a meeting."""
     out = {}
     for t in turns:
         lines = out.setdefault(speakers.cluster_key(recs[t["speaker"]]), [])
@@ -496,11 +497,12 @@ def assemble(words_by_track, diar_by_track, db, attendees, source, bleed, offset
             seen.add(n.strip().lower())
             pool.append(n.strip())
     cands = drop_user(pool, own_names(db, user_name))
-    prompt = speakers.build_naming_prompt(recs, cands, naming_snippets(recs, turns)) if auto_naming else ""
+    snips = naming_snippets(recs, turns)
+    prompt = speakers.build_naming_prompt(recs, cands, snips) if auto_naming else ""
     if prompt:
         text, err = notes.run_claude(prompt, timeout=NAMING_TIMEOUT)
-        if text:
-            recs = speakers.apply_names(recs, speakers.parse_naming_reply(text, allowed=cands))
+        if text:  # a name off the attendee list must be backed by a quoted self-introduction found in the snippets
+            recs = speakers.apply_names(recs, speakers.parse_naming_reply(text, allowed=cands, snippets=snips), allowed=cands)
         else:
             warnings.append(f"Speaker naming failed: {err}")
     return recs, turns

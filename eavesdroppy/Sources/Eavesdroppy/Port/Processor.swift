@@ -330,7 +330,7 @@ enum Processor {
             let prompt = assembled.prompt
             do {
                 let reply = try await withTimeout(namingTimeout) { try await prov.complete(prompt: prompt) }
-                recs = Turns.applyNaming(recs, reply: reply, allowed: assembled.candidates)
+                recs = Turns.applyNaming(recs, reply: reply, allowed: assembled.candidates, snippets: assembled.snippets)
             } catch is CancellationError { throw CancellationError()
             } catch NotesProviderError.cancelled { throw CancellationError()
             } catch { warnings.append("Speaker naming failed: \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }

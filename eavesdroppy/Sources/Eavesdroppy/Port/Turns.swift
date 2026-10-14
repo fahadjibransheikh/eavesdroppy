@@ -108,9 +108,10 @@ enum Turns {
         var turns: [Turn]
         var candidates: [String]  // attendees + call participants minus the user: the allowed names for the reply
         var prompt: String  // "" = nothing to ask; otherwise send to the notes provider, then call `applyNaming`
+        var snippets: [String: [String]] = [:]  // what the prompt quoted: a name off the attendee list must be backed by a line in it
     }
 
-    /// "[mm:ss] text" lines per cluster key, for the naming prompt.
+    /// "[mm:ss] text" lines per cluster key, for the naming prompt: each cluster's first `n` turns in time order (introductions come first).
     static func namingSnippets(_ recs: [Voiceprints.Rec], _ turns: [Turn], n: Int = 10, chars: Int = 240) -> [String: [String]] {
         var out: [String: [String]] = [:]
         for t in turns {
@@ -200,13 +201,15 @@ enum Turns {
             if !t.isEmpty && seen.insert(t.lowercased()).inserted { pool.append(t) }
         }
         let cands = dropUser(pool, ownNames(people, userName: userName))
-        let prompt = autoNaming ? Voiceprints.buildNamingPrompt(recs, attendees: cands, snippets: namingSnippets(recs, turns)) : ""
-        return Assembled(recs: recs, turns: turns, candidates: cands, prompt: prompt)
+        let snips = namingSnippets(recs, turns)
+        let prompt = autoNaming ? Voiceprints.buildNamingPrompt(recs, attendees: cands, snippets: snips) : ""
+        return Assembled(recs: recs, turns: turns, candidates: cands, prompt: prompt, snippets: snips)
     }
 
     /// Provider reply -> records with the names applied (the Python `apply_names(recs, parse_naming_reply(...))`).
-    static func applyNaming(_ recs: [Voiceprints.Rec], reply: String, allowed: [String]) -> [Voiceprints.Rec] {
-        Voiceprints.applyNames(recs, Voiceprints.parseNamingReply(reply, allowed: allowed))
+    /// A name off the attendee list needs a quoted self-introduction found in `snippets` (Voiceprints.introEvidenceOK).
+    static func applyNaming(_ recs: [Voiceprints.Rec], reply: String, allowed: [String], snippets: [String: [String]]) -> [Voiceprints.Rec] {
+        Voiceprints.applyNames(recs, Voiceprints.parseNamingReply(reply, allowed: allowed, snippets: snippets), allowed: allowed)
     }
 }
 

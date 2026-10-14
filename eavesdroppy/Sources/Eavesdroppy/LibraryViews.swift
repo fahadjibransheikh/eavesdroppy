@@ -613,7 +613,7 @@ private struct SpeakersTab: View {
     private func stats(_ s: SpeakerRow) -> String {
         let mine = d.turns.filter { $0.speakerID == s.id }
         let talk = mine.reduce(0) { $0 + max($1.end - $1.start, 0) }
-        let kind: String? = switch s.kind { case "me": "You"; case "known": "Known voice"; case "suggest": "Suggested voice"; case "new": "New voice"; case "room": "Room"; case let k?: k.capitalized; default: nil }
+        let kind: String? = switch s.kind { case "me": "You"; case "known": "Known voice"; case "suggest": "Suggested voice"; case "new": "New voice"; case "intro": "From introduction"; case "room": "Room"; case let k?: k.capitalized; default: nil }
         return ([kind, "\(mine.count) turn\(mine.count == 1 ? "" : "s")"] + [talk >= 60 ? "\(safeInt(talk / 60)) min" : nil]).compactMap { $0 }.joined(separator: " · ")
     }
 
@@ -637,6 +637,9 @@ private struct SpeakersTab: View {
                     if let p = suggestion {  // the best action is the row's headline
                         Button("Yes") { model.assignSpeaker(s, to: p) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                         Button("Someone else") { startNaming(s, scope: .newPerson) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+                    } else if model.isIntro(s) {  // the name is Claude's reading of an introduction: listen, then keep the voice
+                        Button("Save \(firstName(s.label))\u{2019}s voice") { model.saveIntroVoice(s) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
+                        nameMenu(s)
                     } else if s.kind == "me" {
                         Button("Rename") { startNaming(s, scope: .plain) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
                     } else {
@@ -656,6 +659,8 @@ private struct SpeakersTab: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .rowBox()
     }
+
+    private func firstName(_ label: String) -> String { label.split(separator: " ").first.map(String.init) ?? label }
 
     /// Plays from the speaker's first turn: hear the voice, then name it.
     @ViewBuilder private func playButton(_ s: SpeakerRow) -> some View {

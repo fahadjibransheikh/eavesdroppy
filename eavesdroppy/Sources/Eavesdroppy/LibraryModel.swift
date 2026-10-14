@@ -266,6 +266,22 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
         renameCommand(s, displayName(p), ["--person-id", String(p.id)])
     }
 
+    /// A speaker the transcript's own introductions named ("I'm Priya"): kind "intro" until its voice is saved or it is renamed.
+    func isIntro(_ s: SpeakerRow) -> Bool { s.kind == "intro" && s.personID == nil }
+
+    /// "Save Priya's voice": the speaker becomes the person already called that, else a new person with this voice.
+    /// Either way the print learns from it and the speaker's other meetings relabel (the rename-speaker path).
+    func saveIntroVoice(_ s: SpeakerRow) {
+        let name = s.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let p = Self.person(called: name, in: people, display: displayName) { assignSpeaker(s, to: p) }
+        else { renameSpeaker(s, to: name, scope: .newPerson) }
+    }
+
+    /// The person whose shown name is exactly `name` (case aside); nil when nobody is, so a new person is made.
+    nonisolated static func person(called name: String, in people: [PersonRow], display: (PersonRow) -> String) -> PersonRow? {
+        people.first { display($0).caseInsensitiveCompare(name) == .orderedSame }
+    }
+
     /// The person a voiceprint match suggested for this speaker, while the speaker is still unlinked.
     func suggestedPerson(for s: SpeakerRow) -> PersonRow? {
         guard s.personID == nil, let id = s.suggestedPersonID else { return nil }

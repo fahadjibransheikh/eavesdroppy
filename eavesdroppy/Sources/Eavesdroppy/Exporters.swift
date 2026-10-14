@@ -213,8 +213,9 @@ extension EavesdroppyDroplet {
                                              summaryStatus: "ok", folder: nil, audioPath: nil, openActions: 1)
                 let speakers = [SpeakerRow(id: 1, track: "mic", label: prefs.userName, personID: 1, kind: "me"),
                                 SpeakerRow(id: 2, track: "system", label: "Speaker 2", personID: nil, kind: "suggest", suggestedPersonID: 2),
-                                SpeakerRow(id: 3, track: "system", label: "Speaker 3", personID: nil, kind: "new")]
-                let turns = (0..<6).map { TurnRow(idx: $0, speakerID: $0 % 3 + 1, speaker: speakers[$0 % 3].label, start: Double($0) * 40, end: Double($0) * 40 + 35, text: "Turn \($0)") }
+                                SpeakerRow(id: 3, track: "system", label: "Speaker 3", personID: nil, kind: "new"),
+                                SpeakerRow(id: 4, track: "system", label: "Marcus Chen", personID: nil, kind: "intro")]
+                let turns = (0..<6).map { TurnRow(idx: $0, speakerID: $0 % 4 + 1, speaker: speakers[$0 % 4].label, start: Double($0) * 40, end: Double($0) * 40 + 35, text: "Turn \($0)") }
                 let detail = MeetingDetail(summary: summary, attendees: ["Priya Nair", "Sam Lee"], notes: "## Summary\n- Shipped the beta [00:40]\n- Priya owns the rollout plan",
                                            userNotes: what == "mynotes" ? "- Ask Priya about pricing\n- Rollout date: 3 Nov" : "", speakers: speakers, turns: turns, actions: [])
                 library.demo(detail: detail, people: people, tab: what == "speakers" ? .speakers : .notes, askPerson: what == "askperson" ? people[1] : nil)
@@ -228,6 +229,19 @@ extension EavesdroppyDroplet {
             case "recording": demoRecording()
             case "inperson": demoRecording(inPerson: true)
             case "rows": demoRows()
+            case "enrollconfirm": enrollment.demo(.confirm(match: 0.21))
+            case "enrolldone": enrollment.demo(.done(seconds: 24, meetingMatch: 0.88))
+            case "enrollmic": enrollment.demo(.failed(Enrollment.micChanged))
+            case "enrollfew", "enrollother", "enrollquiet", "enrollloud", "enrollnoise":   // the refusal sentences, from the same function `enroll` uses
+                var m = EnrollQuality.Metrics(dominant: "S1", clusters: 1, totalSpeech: 24, speech: 24, overallDB: -30, peakDB: -10, speechDB: -30, snrDB: 20)
+                switch what {
+                case "enrollfew": m.speech = 4.2; m.totalSpeech = 4.2
+                case "enrollother": m.clusters = 2; m.otherShare = 0.38
+                case "enrollquiet": m.speechDB = -52
+                case "enrollloud": m.clipFraction = 0.034
+                default: m.snrDB = 4
+                }
+                enrollment.demo(.failed(EnrollQuality.rejection(m, minSpeech: Voiceprints.minEnrollSpeech) ?? "OK"))
             case "link": library.exportLink = ("Open ENG-142 in Linear", URL(string: "https://linear.app/example/issue/ENG-142")!)
             default: automation.demo(what)
             }

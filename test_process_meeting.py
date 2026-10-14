@@ -1112,7 +1112,7 @@ with Env() as E:
     pm.speakers.diarize = lambda p: {"segments": [(0.0, 12.0, "S1")], "embeddings": {"S1": basis(3)}}
     fails("enroll", str(voice_wav(E.container / "quiet.wav", -55, -80)), *C(E), contains="Too quiet: your voice was recorded at -")
     fails("enroll", str(voice_wav(E.container / "loud.wav", -12, overdrive=8)), *C(E), contains="Too loud: ")
-    fails("enroll", str(voice_wav(E.container / "noisy.wav", -25, -22)), *C(E), contains="Too much background noise. Move somewhere quieter, or closer to the microphone, and try again.")
+    fails("enroll", str(voice_wav(E.container / "noisy.wav", -25, -12)), *C(E), contains="Too much background noise. Move somewhere quieter, or closer to the microphone, and try again.")
     assert people() == before, "a refused sample saves nothing"
     # the numbers (EnrollQualityTests.measuresSpeechLevelAndSNRFromTheDominantClusterFrames, same signal): -20 dBFS tone then a -60 dBFS floor
     n = 16000 * 20; i = np.arange(n)
@@ -1121,10 +1121,10 @@ with Env() as E:
     assert q["dominant"] == "S1" and q["clusters"] == 2 and abs(q["speech_db"] + 20) < 0.1 and abs(q["snr_db"] - 40) < 0.5, q
     assert abs(q["overall_db"] + 23) < 0.2 and abs(q["other_share"] - 0.5) < 1e-9, q
     q = speakers.enroll_quality(x, [], 0.5, 0.0); assert q["dominant"] is None and speakers.enroll_rejection(q).startswith("No speech was picked up.")
-    q = {"dominant": "S1", "speech": 12, "other_share": 0.2, "speech_db": -45.0, "clip_fraction": 0.01, "snr_db": 8.0}
+    q = {"dominant": "S1", "speech": 12, "other_share": 0.2, "speech_db": -40.0, "clip_fraction": 0.01, "snr_db": 3.0}
     assert speakers.enroll_rejection(q) is None, "every limit is inclusive"
     assert speakers.enroll_rejection({**q, "snr_db": None}) is None
-    assert speakers.enroll_rejection({**q, "snr_db": 7.9}).startswith("Too much background noise")
+    assert speakers.enroll_rejection({**q, "snr_db": 2.9}).startswith("Too much background noise")
     assert speakers.enroll_rejection({**q, "clip_fraction": 0.05}) == "Too loud: 5.0% of the recording is distorted. Move back from the microphone or lower its input volume."
     assert speakers.enroll_rejection({**q, "speech_db": -60.0}) == "Too quiet: your voice was recorded at -60 dB. Move closer to the microphone or raise its input volume."
     # import-drive: legacy folders from the pre-library pipeline; idempotent; counts

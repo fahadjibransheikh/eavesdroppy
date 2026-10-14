@@ -35,13 +35,14 @@ SUGGEST_THR = 0.60  # [SUGGEST_THR, AUTO_THR): offer the name; below: new person
 ME_THR = 0.60  # a cluster matching the enrolled Me print at least this well is Me
 MIN_ENROLL_SPEECH = 10.0  # seconds of speech in the dominant cluster
 # Enrollment quality, mirrored in EnrollQuality.swift (same thresholds, same sentences). Calibrated 2026-10-14 on 25 s cuts of an
-# in-person archive: 375 single-speaker windows read speech -35.0..-23.1 dBFS, SNR >= 9.3, one cluster; 39 windows with a second
-# talker split into two clusters whose smaller one held 20..49 % of the speech.
+# in-person archive (+ the 65 s golden sample): 375 single-speaker windows read speech -35.0..-23.1 dBFS, SNR >= 9.3, one cluster,
+# clipping <= 0.17 %; 39 windows with a second talker split into two clusters, the smaller one 20..49 % of the speech; the
+# golden sample reads -33.5 dBFS, SNR 5.6 (continuous speech with no pauses reads low), so the SNR limit is a gross-noise guard.
 MAX_OTHER_SHARE = 0.20  # a second cluster with more than this share of all speech: somebody else was talking
-MIN_SPEECH_DB = -45.0  # mean power of the dominant cluster's frames
+MIN_SPEECH_DB = -40.0  # mean power of the dominant cluster's frames (quietest clean window -35.0, a distant talker -41.6)
 MAX_CLIP_FRACTION = 0.01  # native-rate samples at or above CLIP_LEVEL
 CLIP_LEVEL = 0.999
-MIN_SNR_DB = 8.0  # dominant-cluster speech level minus the 10th-percentile 20 ms frame power
+MIN_SNR_DB = 3.0  # dominant-cluster speech level minus the 10th-percentile 20 ms frame power
 ENROLL_FRAME = 320  # 20 ms at 16 kHz
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS people(

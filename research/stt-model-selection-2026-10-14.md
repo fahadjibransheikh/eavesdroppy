@@ -16,6 +16,7 @@ Question: which on-device speech-to-text model should Eavesdroppy (meetings, 30 
 - Clips: the same 12 clips as the 2026-10-13 doc (D1 to D8 dictation-length, C1 English control 73 s, M1/M2/M3 mixed meeting excerpts 90/70/67 s). Models with a 30 to 40 s limit (Omnilingual, Qwen3, Nemotron CLI, MOSS CLI, one process per chunk) were run on 4 long clips pre-cut into 3 to 4 chunks of 14 to 30 s at the quietest point; "infer" is the sum of each chunk's CLI-reported time. Apple and Parakeet got the whole file.
 - Tools: `speech` CLI v0.0.28 (soniqo/speech-swift release, Apache-2.0) for Omnilingual, Qwen3-ASR, Nemotron and MOSS; a 40-line Swift script (SpeechAnalyzer + SpeechTranscriber) for Apple; `fluidaudiocli` for Parakeet; `whisperkit-cli` 1.1.1 for turbo. Memory is `/usr/bin/time -l` peak footprint and max RSS per process.
 - Download workaround: the `speech` CLI's own downloader failed ("Refusing to write unsafe remote file name: config.json"), so I pre-populated its cache directory with `hf download`. Not a model problem.
+- **AC re-check (after the session restart):** the Mac reported AC power. I re-cut the 4 long clips from the raw session (`20261013-192230-671-0001`, same mic-clock ranges as the 2026-10-13 doc, 90/70/67/73 s; the 8 short D clips could not be re-cut because their times were not recorded) and re-ran Apple, Parakeet and MOSS on AC at normal priority. Inference time for the same 300 s: Apple 8.6 s earlier vs 8.0 s now (0.89, 2.07, 2.31, 2.62 s per clip); Parakeet 4.25 s vs 4.29 s; MOSS 30.8 s vs 26.5 s. So earlier timings for the MLX models were at most about 15% pessimistic; ordering does not change.
 - Scratch outputs (scratchpad `stt/` and `stt2/`) were wiped when the session restarted. Numbers and transcripts below are copied from what I saw during the run; items I cannot re-confirm are marked **(unconfirmed after wipe)**.
 - Side effect on this Mac: installing Apple's `mul_IN` speech asset (639 MB, `com.apple.speech.asr.transcription.mul-IN`, took 96.6 s) is a system-wide change. Nothing under Droppy was touched.
 
@@ -137,6 +138,18 @@ Notes:
 
 **M3 (67 s, Urdu-heavy remote speaker via mic bleed)**: Apple `mul_IN` gave Latin throughout ("ji. Nah, say yes. A sare points I believe Jitne bhi bole hai vo sahi hai like complete hum ye rocks vagairah jo hai vaise ye bhi cheejen change ho rahi hai kafi ..."). MOSS wrote Perso-Arabic ("جی نہیں آ سہی ہے آ سارے points I believe ...") then switched to Devanagari mid-clip. WhisperKit turbo `ur` + prompt (normal priority run): "Jee, nahi, saai hai, saare points I believe, jitnou ne bhi bool hai, wou saai hai, like complete hum, ye rocks vokra johai ..." (noisier).
 
+### 4e. English-only control (C1, 73 s, English, remote speaker via mic bleed), re-run on AC
+
+No human reference exists, so this is mutual disagreement between three systems (word error rate of one system scored against another, lower-cased, punctuation and timestamps stripped, `jiwer`). Word counts: Parakeet 154, Apple `mul_IN` 150, MOSS 153.
+
+| scored system \ reference | Parakeet | Apple `mul_IN` | MOSS |
+|---|---|---|---|
+| Parakeet | - | 14.7% | 15.7% |
+| Apple `mul_IN` | 14.3% | - | 17.6% |
+| MOSS | 15.6% | 18.0% | - |
+
+Reading: the three systems disagree with each other by 14 to 18% on this audio, and Apple is not a clear outlier (it is slightly farther from MOSS than Parakeet is). On 150 words that gap is within noise. The 2026-10-12 benchmark put Parakeet at 15.9% against human text on meeting audio, so a 14 to 18% mutual distance is about what two imperfect systems would show. This supports "Apple is in the same accuracy band as Parakeet for English", not "Apple is as accurate as Parakeet". Note that Apple writes "L 10" where Parakeet writes "L10".
+
 ### 4d. Dictation latency view (7 to 15 s clips, resident model assumed except where noted)
 
 - Parakeet: 0.06 to 0.14 s. Apple `mul_IN`: 0.73 to 0.80 s per call (includes SpeechAnalyzer setup per file; a streaming session may be cheaper, not tested). MOSS 0.73 to 1.27 s. Qwen3 1.7B 8-bit 0.58 to 1.81 s. Nemotron 1.04 to 2.73 s (streaming model; chunk-wise decoding would likely be faster in a live pipeline, not tested). WhisperKit turbo about 2 to 8 s decode.
@@ -190,9 +203,9 @@ Reddit pages, X posts, and the Open ASR Leaderboard multilingual tab could not b
 ## 9. What remains uncertain
 
 1. **No ground truth.** All accuracy judgments are my reading of transcripts against references I (and the 2026-10-13 doc) inferred from model outputs. A 15-minute human correction of D3 to D6 and M1/M2 would turn this into WER.
-2. **Apple vs Parakeet on English.** On D7 Apple made two errors that Parakeet and Whisper also made differently; I had no time to compute a WER on the 5 English clips. Whether to route English-only calls to Parakeet (my recommendation) rests on Parakeet's known English accuracy, not on a head-to-head here.
+2. **Apple vs Parakeet on English.** Only one English clip (C1, 150 words) could be compared after the wipe, and only as mutual disagreement (14 to 18%, section 4e), not against a human reference. On D7 Apple made two errors that Parakeet and Whisper made differently. Routing English-only calls to Parakeet rests on Parakeet's known English accuracy plus its 5x speed and word timings, not on a decisive head-to-head.
 3. **Apple's model is OS-managed and unversioned.** Its output script, accuracy and availability can change with an OS update. `mul_IN`, `hi_IN` and `ur_IN` returning identical text is observed behaviour, not documented. Minimum OS is macOS 26 per a third-party issue (45 locales listed), not Apple documentation.
-4. **Timing conditions.** Possibly on battery for some runs, load average about 4, per-process load overhead included in "wall" but not "infer". Full-meeting runs exist only for Apple and Parakeet.
+4. **Timing conditions.** Earlier runs may have been partly on battery (the AC re-run was up to 15% faster for MLX), load average about 4, per-process load overhead included in "wall" but not "infer". Full-meeting runs exist only for Apple and Parakeet.
 5. **Bodhan Indic-Transcribe Flex not measured** (gated, license conditions). It may beat everything here on Urdu. It is the first follow-up.
 6. Apple's `mul_IN` is untested for: multiple speakers talking over each other, noisy system-audio tap, 90-minute single call, and memory in the system service under long input.
 7. The wipe of the scratchpad removed raw outputs; transcripts quoted above are copied from my session and are verbatim as seen, but cannot be re-diffed.

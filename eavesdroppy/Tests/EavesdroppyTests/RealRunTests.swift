@@ -6,6 +6,9 @@ import Testing
 // environment variable is set, so the suite stays hermetic. Output goes to stdout ("REAL ..." lines).
 //
 //   EAVESDROPPY_REAL_SESSION=<dir with mic.wav [system.wav] meta.json>   Processor.process on a copy, notes provider off
+//     + EAVESDROPPY_REAL_CONTAINER=<container> EAVESDROPPY_REAL_OUT=<output folder>   instead: the session (already inside
+//       <container>/sessions) is processed in place into the real library and folder, with the user's notes provider (as the droplet does)
+//   EAVESDROPPY_REAL_CMD="delete 2" + the two above   one StoreCommands subcommand on the real library (delete, rename-meeting ...)
 //   EAVESDROPPY_DETECT_WAVS=a.wav,b.wav                                  language-detection score of each 16 kHz mono wav
 //   EAVESDROPPY_CANCEL_WAV=<16 kHz mono wav, 1+ min>                    cancels Apple's transcription after 1 s and times how long it takes to stop
 //   EAVESDROPPY_COMPARE_WAV=<16 kHz mono wav> EAVESDROPPY_COMPARE_OUT=<dir>   words of mul_IN, en_US (and Parakeet) as text files
@@ -16,17 +19,20 @@ private let env = ProcessInfo.processInfo.environment
     @Test func processARealSession() async throws {
         guard let path = env["EAVESDROPPY_REAL_SESSION"] else { return }
         let fm = FileManager.default
+        let live = env["EAVESDROPPY_REAL_CONTAINER"].map { (container: URL(fileURLWithPath: $0), out: env["EAVESDROPPY_REAL_OUT"]!) }
         let root = URL(fileURLWithPath: PyPath.resolve(fm.temporaryDirectory.path)).appendingPathComponent("real-run-\(UUID().uuidString)")
         let name = URL(fileURLWithPath: path).lastPathComponent
-        let container = root.appendingPathComponent("container"), session = container.appendingPathComponent("sessions/\(name)")
-        try fm.createDirectory(at: container.appendingPathComponent("sessions"), withIntermediateDirectories: true)
-        try fm.copyItem(at: URL(fileURLWithPath: path), to: session)
-        defer { if env["EAVESDROPPY_KEEP"] == nil { try? fm.removeItem(at: root) } }
+        let container = live?.container ?? root.appendingPathComponent("container"), session = container.appendingPathComponent("sessions/\(name)")
+        if live == nil {
+            try fm.createDirectory(at: container.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+            try fm.copyItem(at: URL(fileURLWithPath: path), to: session)
+        }
+        defer { if live == nil, env["EAVESDROPPY_KEEP"] == nil { try? fm.removeItem(at: root) } }
 
         let lines = LockedBox<[String]>([])
         let t0 = Date()
-        var p = Processor.Params(session: session, container: container, outRoot: root.appendingPathComponent("out").path, userName: nil,
-                                 resolution: .none(status: "notes off for the real run"))
+        var p = Processor.Params(session: session, container: container, outRoot: live?.out ?? root.appendingPathComponent("out").path, userName: nil,
+                                 resolution: live == nil ? .none(status: "notes off for the real run") : await NotesProviders.resolve(NotesProviderConfig()))
         p.log = { l in lines.value.append(l); print("REAL log +\(String(format: "%.1f", Date().timeIntervalSince(t0))) s: \(l)") }
         p.crashAt = nil
         let r = try await Processor.process(p)
@@ -45,6 +51,13 @@ private let env = ProcessInfo.processInfo.environment
         print("REAL script: \(nonLatin) Arabic/Devanagari characters; \(latin) of \(letters.count) letters are Latin (\(String(format: "%.1f", Double(latin) * 100 / Double(max(letters.count, 1)))) %)")
         for l in body.split(separator: "\n").filter({ !$0.isEmpty }).prefix(Int(env["EAVESDROPPY_REAL_LINES"] ?? "") ?? 14) { print("REAL | \(l.prefix(260))") }
         #expect(nonLatin == 0)
+    }
+
+    @Test func runARealStoreCommand() async throws {
+        guard let cmd = env["EAVESDROPPY_REAL_CMD"], let c = env["EAVESDROPPY_REAL_CONTAINER"], let out = env["EAVESDROPPY_REAL_OUT"] else { return }
+        let data = try StoreCommands.run(cmd.split(separator: " ").map(String.init), container: URL(fileURLWithPath: c), outRoot: URL(fileURLWithPath: out),
+                                         warn: { print("REAL warn: \($0)") })
+        print("REAL cmd \(cmd): \(String(decoding: data, as: UTF8.self))")
     }
 
     @Test func scoreLanguageDetectionOfWavs() async throws {

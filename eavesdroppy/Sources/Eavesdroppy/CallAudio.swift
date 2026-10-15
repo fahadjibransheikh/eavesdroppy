@@ -31,7 +31,7 @@ enum CallApps {
     /// Bundle ids of the apps whose windows hold a meeting's participant list (item 7), for the Accessibility reader.
     static let participantApps: [String] = ["us.zoom.xos", "com.microsoft.teams2", "com.microsoft.teams",
                                             "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",
-                                            "com.microsoft.edgemac", "com.brave.Browser", "org.mozilla.firefox"]
+                                            "com.microsoft.edgemac", "com.brave.Browser", "org.mozilla.firefox", "at.studio.AsideBrowser"]
 }
 
 struct InputProcess: Equatable { var pid: pid_t; var bundleID: String }

@@ -36,7 +36,7 @@ struct LibrarySurface: View {
                 MeetingList(model: model).frame(width: 236)
                 Group {
                     if model.openID != nil {
-                        MeetingDetailView(model: model).id(model.openID).transition(DroppyTransition.expandedContent)
+                        MeetingDetailView(model: model).id(model.openID)  // no transition: see NotesPanelController's style mask
                     } else if !model.meetings.isEmpty {
                         Text("Pick a meeting").font(.system(size: 12)).foregroundStyle(tertiary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -810,7 +810,7 @@ struct LibraryWindowView: View {
 
     var body: some View {
         LibrarySurface(model: model)
-            .padding(.horizontal, DroppySpacing.lg).padding(.bottom, DroppySpacing.lg).padding(.top, 30)  // under the transparent title bar
+            .padding(DroppySpacing.lg)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(DroppyPanelSurface(cornerRadius: 0).ignoresSafeArea())
             .preferredColorScheme(.dark)

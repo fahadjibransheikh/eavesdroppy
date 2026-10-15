@@ -36,7 +36,10 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
     func show(title: String, focus: Bool) {
         let p = panel ?? makePanel()
         p.title = title
-        if focus {
+        if library {  // asked for from the menu bar or a shortcut while another app is in front: come forward with Droppy
+            NSApp.activate(ignoringOtherApps: true)
+            p.makeKeyAndOrderFront(nil); p.orderFrontRegardless()
+        } else if focus {
             p.makeKeyAndOrderFront(nil)
             p.focusEditor()
             DispatchQueue.main.async { [weak p] in p?.focusEditor() }  // the editor may not be in the view tree yet on a first open
@@ -56,7 +59,10 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
 
     func makePanel() -> NotesPanel {  // internal: the panel shot test builds the real window
         let p = NotesPanel(contentRect: Self.restoredFrame(loadFrame(), screens: NSScreen.screens.map(\.visibleFrame)) ?? firstFrame(),
-                           styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                           // The library's content stays out of the title bar: with .fullSizeContentView, AppKit's drag-region pass
+                           // trapped inside SwiftUI's scroll clip view when a meeting was switched (Droppy crash 2026-10-15 12:41).
+                           styleMask: library ? [.titled, .closable, .resizable, .miniaturizable]
+                                              : [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                            backing: .buffered, defer: false)
         p.level = library ? .normal : .floating
         p.focusesEditorOnKey = !library
@@ -64,7 +70,7 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false  // Droppy is a background app: the default would hide the panel at once
         p.isReleasedWhenClosed = false
-        p.titlebarAppearsTransparent = true
+        p.titlebarAppearsTransparent = !library
         p.isOpaque = false; p.backgroundColor = .clear
         p.appearance = NSAppearance(named: .darkAqua)
         p.minSize = library ? Self.libraryMinSize : Self.minSize

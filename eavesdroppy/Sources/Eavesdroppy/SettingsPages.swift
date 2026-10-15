@@ -307,7 +307,7 @@ private struct CalendarPage: View {
                 }
                 if let m = automation.message { DropletControlRow(title: m) { EmptyView() } }
                 DropletToggleRow(title: "Start recording automatically",
-                                 subtitle: "Starts when the event begins, without asking. The notch reminds everyone they're being recorded.",
+                                 subtitle: "Starts when a call app opens your microphone during a calendar call, without asking. The notch reminds everyone they're being recorded.",
                                  isOn: prefs.binding(Prefs.Key.calendarAutoStart, false))
                     .disabled(!prefs.calendarPrompt)
             }

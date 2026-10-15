@@ -15,9 +15,20 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
     private let saveFrame: (String) -> Void
     private var panel: NotesPanel?
     private var saveWork: DispatchWorkItem?
+    /// The meetings library reuses this window (Droppy refuses its expanded surface too): larger, centred, not floating.
+    private let library: Bool
 
-    init(content: @escaping () -> AnyView, loadFrame: @escaping () -> String, saveFrame: @escaping (String) -> Void) {
-        self.content = content; self.loadFrame = loadFrame; self.saveFrame = saveFrame
+    init(content: @escaping () -> AnyView, loadFrame: @escaping () -> String, saveFrame: @escaping (String) -> Void, library: Bool = false) {
+        self.content = content; self.loadFrame = loadFrame; self.saveFrame = saveFrame; self.library = library
+    }
+
+    static let librarySize = NSSize(width: 900, height: 620), libraryMinSize = NSSize(width: 680, height: 420)
+
+    private func firstFrame() -> NSRect {
+        let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+        guard library, let s = screen else { return Self.defaultFrame(in: screen) }
+        let size = NSSize(width: min(Self.librarySize.width, s.width), height: min(Self.librarySize.height, s.height))
+        return NSRect(x: s.midX - size.width / 2, y: s.midY - size.height / 2, width: size.width, height: size.height)
     }
 
     /// `focus`: take keyboard focus (the user asked for the window). An automatic open at the start of a recording
@@ -44,11 +55,11 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
     }
 
     func makePanel() -> NotesPanel {  // internal: the panel shot test builds the real window
-        let p = NotesPanel(contentRect: Self.restoredFrame(loadFrame(), screens: NSScreen.screens.map(\.visibleFrame))
-                                        ?? Self.defaultFrame(in: (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame),
+        let p = NotesPanel(contentRect: Self.restoredFrame(loadFrame(), screens: NSScreen.screens.map(\.visibleFrame)) ?? firstFrame(),
                            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                            backing: .buffered, defer: false)
-        p.level = .floating
+        p.level = library ? .normal : .floating
+        p.focusesEditorOnKey = !library
         p.animationBehavior = .none  // shown from a keyboard shortcut or by the recording starting: no show or close animation
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false  // Droppy is a background app: the default would hide the panel at once
@@ -56,7 +67,7 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
         p.titlebarAppearsTransparent = true
         p.isOpaque = false; p.backgroundColor = .clear
         p.appearance = NSAppearance(named: .darkAqua)
-        p.minSize = Self.minSize
+        p.minSize = library ? Self.libraryMinSize : Self.minSize
         p.delegate = self
         let hosting = NSHostingView(rootView: content())
         hosting.sizingOptions = []  // the window's size is the user's, not the content's
@@ -103,11 +114,12 @@ final class NotesPanelController: NSObject, NSWindowDelegate {
 final class NotesPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    var focusesEditorOnKey = true
 
     /// A click anywhere in the panel, header included, leaves the cursor in the notes.
     override func becomeKey() {
         super.becomeKey()
-        if !(firstResponder is NSTextView) { focusEditor() }
+        if focusesEditorOnKey, !(firstResponder is NSTextView) { focusEditor() }
     }
 
     func focusEditor() {

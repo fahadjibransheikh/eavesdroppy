@@ -207,23 +207,25 @@ extension EavesdroppyDroplet {
                                                          m(4, "Quarterly review", 20 * 86_400, 3300, 3), m(5, "Empty import", 25 * 86_400, 0, 0)],
                                  status: what == "empty" ? nil : ("Imported 3, skipped 0, failed 0", false))
                 openLibrary()
-            case "speakers", "askperson", "mynotes":
+            case "speakers", "askperson", "mynotes", "askme":
                 let people = [PersonRow(id: 1, name: "Me", isMe: true), PersonRow(id: 2, name: "Priya Nair", isMe: false), PersonRow(id: 3, name: "Sam Lee", isMe: false)]
                 let summary = MeetingSummary(id: 1, title: "Weekly sync", start: "2026-10-12T10:00:00+05:00", duration: 1860, source: "record", template: "general",
                                              summaryStatus: "ok", folder: nil, audioPath: nil, openActions: 1)
-                let speakers = [SpeakerRow(id: 1, track: "mic", label: prefs.userName, personID: 1, kind: "me"),
+                let speakers = [what == "askme" ? SpeakerRow(id: 1, track: "mic", label: "Speaker 1", personID: nil, kind: "new")
+                                                : SpeakerRow(id: 1, track: "mic", label: prefs.userName, personID: 1, kind: "me"),
                                 SpeakerRow(id: 2, track: "system", label: "Speaker 2", personID: nil, kind: "suggest", suggestedPersonID: 2),
                                 SpeakerRow(id: 3, track: "system", label: "Speaker 3", personID: nil, kind: "new"),
                                 SpeakerRow(id: 4, track: "system", label: "Marcus Chen", personID: nil, kind: "intro")]
                 let turns = (0..<6).map { TurnRow(idx: $0, speakerID: $0 % 4 + 1, speaker: speakers[$0 % 4].label, start: Double($0) * 40, end: Double($0) * 40 + 35, text: "Turn \($0)") }
                 let detail = MeetingDetail(summary: summary, attendees: ["Priya Nair", "Sam Lee"], notes: "## Summary\n- Shipped the beta [00:40]\n- Priya owns the rollout plan",
-                                           userNotes: what == "mynotes" ? "- Ask Priya about pricing\n- Rollout date: 3 Nov" : "", speakers: speakers, turns: turns, actions: [])
-                library.demo(detail: detail, people: people, tab: what == "speakers" ? .speakers : .notes, askPerson: what == "askperson" ? people[1] : nil)
+                                           userNotes: what == "mynotes" ? "- Ask Priya about pricing\n- Rollout date: 3 Nov" : "", speakers: speakers, turns: turns, actions: [],
+                                           bleed: what == "askme")
+                library.demo(detail: detail, people: people, tab: what == "speakers" || what == "askme" ? .speakers : .notes, askPerson: what == "askperson" ? people[1] : nil)
                 openLibrary()
             case "olddroplet": notify("Remove the old Meetings droplet", symbol: "exclamationmark.triangle.fill",
                                       detail: "In Settings › Store › Local droplets. Eavesdroppy replaces it, and two recorders would both offer to start.")
             case "voicenotice": showVoiceNotice()
-            case "notesready": notify("Notes ready", symbol: "checkmark.circle.fill", detail: "Weekly sync", action: ("Open", {}))
+            case "notesready": notify("Notes ready", symbol: "checkmark.circle.fill", detail: "Weekly sync · ⌥⌘N to open")
             case "stopped": notify("Recording stopped", symbol: "exclamationmark.triangle.fill", detail: "The disk is full. What was captured is saved under Failed.", priority: .high)
             case "consent": notify("Recording started", symbol: "mic.fill", detail: "Tell everyone on the call.")
             case "recording": demoRecording()

@@ -305,7 +305,7 @@ private struct MeetingList: View {
                                     .padding(.top, DroppySpacing.sm).padding(.bottom, 2).padding(.leading, DroppySpacing.smd)
                             }
                             ForEach(sec.meetings) { m in
-                                Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : .notes, turn: m.hitTurnIdx) } label: {
+                                Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : nil, turn: m.hitTurnIdx) } label: {
                                     MeetingRow(m: m, selected: model.openID == m.id, dayShown: sec.title == "Today" || sec.title == "Yesterday")
                                 }
                                 .buttonStyle(.plain)
@@ -394,6 +394,10 @@ private struct MeetingDetailView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     TitleRow(model: model, d: d)
                     Text(meta(d)).font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
+                    if d.bleed {  // the call leaked into the mic: say once, here, why some lines may be missing
+                        Label("Recorded on speakers. Headphones give a cleaner transcript.", systemImage: "speaker.wave.2")
+                            .font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
+                    }
                 }
                 HStack(spacing: DroppySpacing.sm) {
                     TabStrip(model: model, d: d)
@@ -601,7 +605,7 @@ private struct TranscriptTab: View {
     @ObservedObject var model: LibraryModel
     let d: MeetingDetail
 
-    private func isMe(_ g: TranscriptGroup) -> Bool { d.speakers.first { $0.id == g.turns.first?.speakerID }?.kind == "me" }
+    private func isMe(_ g: TranscriptGroup) -> Bool { d.speakers.first { $0.id == g.turns.first?.speakerID }.map(model.isMe) ?? false }
 
     var body: some View {
         if d.turns.isEmpty {
@@ -644,6 +648,7 @@ private struct SpeakersTab: View {
     @State private var editing: Int?
     @State private var draft = ""
     @State private var scope = RenameScope.newPerson
+    @State private var notMe = Set<Int>()  // "No" to "Is this you?": ask about no one else in this meeting
 
     var body: some View {
         if d.speakers.isEmpty {
@@ -661,12 +666,14 @@ private struct SpeakersTab: View {
     private func stats(_ s: SpeakerRow) -> String {
         let mine = d.turns.filter { $0.speakerID == s.id }
         let talk = mine.reduce(0) { $0 + max($1.end - $1.start, 0) }
-        let kind: String? = switch s.kind { case "me": "You"; case "known": "Known voice"; case "suggest": "Suggested voice"; case "new": "New voice"; case "intro": "From introduction"; case "room": "Room"; case let k?: k.capitalized; default: nil }
+        let raw: String? = switch s.kind { case "me": "You"; case "known": "Known voice"; case "suggest": "Suggested voice"; case "new": "New voice"; case "intro": "From introduction"; case "room": "Room"; case let k?: k.capitalized; default: nil }
+        let kind = model.isMe(s) ? "You" : raw
         return ([kind, "\(mine.count) turn\(mine.count == 1 ? "" : "s")"] + [talk >= 60 ? "\(safeInt(talk / 60)) min" : nil]).compactMap { $0 }.joined(separator: " · ")
     }
 
     @ViewBuilder private func row(_ s: SpeakerRow) -> some View {
         let suggestion = editing == s.id ? nil : model.suggestedPerson(for: s)  // a voiceprint match that was not sure enough to apply
+        let askMe = editing != s.id && suggestion == nil && notMe.isEmpty && model.likelyMe(in: d)?.id == s.id
         VStack(alignment: .leading, spacing: DroppySpacing.xsm) {
             HStack(spacing: DroppySpacing.sm) {
                 if editing == s.id {
@@ -677,18 +684,21 @@ private struct SpeakersTab: View {
                 } else {
                     playButton(s)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(suggestion.map { "Is this \(model.displayName($0))?" } ?? s.label)
+                        Text(askMe ? "Is this you?" : suggestion.map { "Is this \(model.displayName($0))?" } ?? s.label)
                             .font(.system(size: 13, weight: .medium)).foregroundStyle(primary).lineLimit(1)
-                        Text(suggestion == nil ? stats(s) : "\(s.label) · \(stats(s))").font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
+                        Text(suggestion == nil && !askMe ? stats(s) : "\(s.label) · \(stats(s))").font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    if let p = suggestion {  // the best action is the row's headline
+                    if askMe {  // nobody here is the user yet: one click names them in every meeting from now on
+                        Button("Yes, that's me") { model.markMe(s) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
+                        Button("No") { notMe.insert(s.id) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+                    } else if let p = suggestion {  // the best action is the row's headline
                         Button("Yes") { model.assignSpeaker(s, to: p) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                         Button("Someone else") { startNaming(s, scope: .newPerson) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
                     } else if model.isIntro(s) {  // the name is Claude's reading of an introduction: listen, then keep the voice
                         Button("Save \(firstName(s.label))\u{2019}s voice") { model.saveIntroVoice(s) }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                         nameMenu(s)
-                    } else if s.kind == "me" {
+                    } else if model.isMe(s) {
                         Button("Rename") { startNaming(s, scope: .plain) }.buttonStyle(DroppyQuietButtonStyle(size: .small))
                     } else {
                         nameMenu(s)
@@ -722,6 +732,7 @@ private struct SpeakersTab: View {
     /// People first, then a new person, then this meeting only. Replaces the "This is…" menu and the Rename button.
     private func nameMenu(_ s: SpeakerRow) -> some View {
         Menu {
+            if model.me == nil { Button("That's me") { model.markMe(s) } }
             ForEach(model.people) { p in Button(model.displayName(p)) { model.assignSpeaker(s, to: p) } }
             if !model.people.isEmpty { Divider() }
             Button("New person…") { startNaming(s, scope: .newPerson) }
@@ -790,5 +801,18 @@ private struct ActionsTab: View {
                 .menuStyle(.button).buttonStyle(DroppyCircleButtonStyle(size: 20)).fixedSize().accessibilityLabel("More")
         }
         .rowBox()
+    }
+}
+
+/// The library in its own window (see `EavesdroppyDroplet.openLibrary`): the same view, on Droppy's panel surface.
+struct LibraryWindowView: View {
+    @ObservedObject var model: LibraryModel
+
+    var body: some View {
+        LibrarySurface(model: model)
+            .padding(.horizontal, DroppySpacing.lg).padding(.bottom, DroppySpacing.lg).padding(.top, 30)  // under the transparent title bar
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(DroppyPanelSurface(cornerRadius: 0).ignoresSafeArea())
+            .preferredColorScheme(.dark)
     }
 }

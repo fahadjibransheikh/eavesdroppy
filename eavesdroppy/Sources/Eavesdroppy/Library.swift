@@ -71,6 +71,8 @@ struct MeetingDetail: Hashable {
     var speakers: [SpeakerRow]
     var turns: [TurnRow]
     var actions: [ActionRow]
+    /// Recorded on speakers: the call leaked into the mic, so the mic track teaches no voiceprint.
+    var bleed = false
 }
 
 struct PersonMe: Hashable { var id: Int; var name: String; var samples: Int; var updated: String? }
@@ -252,13 +254,13 @@ final class LibraryDB {
 
     /// Meeting row + speakers + turns + action items (library.get_meeting without embeddings), or nil.
     func meeting(id: Int) throws -> MeetingDetail? {
-        var head: (MeetingSummary, String, String, String)?
-        try rows("SELECT \(Self.cols), m.attendees, m.notes_md, m.user_notes FROM meetings m WHERE m.id = ?", [.int(id)]) {
-            head = (summary($0), str($0, 10) ?? "[]", str($0, 11) ?? "", str($0, 12) ?? "")
+        var head: (MeetingSummary, String, String, String, Bool)?
+        try rows("SELECT \(Self.cols), m.attendees, m.notes_md, m.user_notes, m.bleed FROM meetings m WHERE m.id = ?", [.int(id)]) {
+            head = (summary($0), str($0, 10) ?? "[]", str($0, 11) ?? "", str($0, 12) ?? "", (int($0, 13) ?? 0) != 0)
         }
-        guard let (sum, att, notes, typed) = head else { return nil }
+        guard let (sum, att, notes, typed, bleed) = head else { return nil }
         let attendees = (try? JSONSerialization.jsonObject(with: Data(att.utf8)) as? [String]) ?? []
-        var d = MeetingDetail(summary: sum, attendees: attendees, notes: notes, userNotes: typed, speakers: [], turns: [], actions: [])
+        var d = MeetingDetail(summary: sum, attendees: attendees, notes: notes, userNotes: typed, speakers: [], turns: [], actions: [], bleed: bleed)
         let hasSuggested = columns("speakers").contains("suggested_person_id")
         try rows("SELECT id, track, label, person_id, kind, \(hasSuggested ? "suggested_person_id" : "NULL") FROM speakers WHERE meeting_id = ? ORDER BY id", [.int(id)]) {
             d.speakers.append(SpeakerRow(id: int($0, 0) ?? 0, track: str($0, 1), label: str($0, 2) ?? "?", personID: int($0, 3), kind: str($0, 4),

@@ -110,6 +110,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     private var activeDir: URL?  // being created/recorded: not a failed session
     private var timer: Timer?
     private var confirmTimer: Timer?
+    /// The meeting a "Notes ready" card is announcing, and when: ⌥⌘N opens it while the card is up.
+    private var readyNotes: (folder: String, at: Date)?
     private var importPanel: NSOpenPanel?  // open while the import picker is up; it holds the shelf open
     private var permissionTask: Task<Void, Never>?
     private var systemChecked = false
@@ -190,6 +192,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         ) { [weak self] in
             guard let self else { return }
             if self.automation.prompt.active { self.automation.prompt.onPrimary() }  // the notch prompt's card can't be clicked
+            else if let r = self.readyNotes, Date().timeIntervalSince(r.at) < 15 { self.readyNotes = nil; self.openNotes(r.folder) }
             else if self.recording { self.showNotes() } else { self.openLibrary() }
         }
         log("Eavesdroppy activated, sessions at \(sessionsDir.path)")
@@ -237,6 +240,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         heightSub = nil
         library.surfaceClosed(); enrollment.cancel()
         notesPanel?.teardown(); notesPanel = nil
+        libraryPanel?.teardown(); libraryPanel = nil
         if let panel = importPanel { importPanel = nil; _ = host?.shelf.setHoldsOpen(false); panel.cancel(nil) }
         recorder = nil; session = nil; activeDir = nil; phase = .idle; warnings = []; notesText = ""
         confirmingDiscard = false; confirmingDelete = nil
@@ -460,10 +464,21 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     func openLibrary() {
         presentation = host?.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
-        // Droppy refuses the surface for some approved local builds ("does not publish a surface with that id"): the
-        // shelf is the nearest thing, with the recent meetings in it.
-        if presentation == nil { _ = host?.shelf.open(revealing: Self.widgetID) }
+        guard presentation == nil, host != nil else { return }
+        // Droppy refuses the surface for approved local builds ("does not publish a surface with that id"), so every
+        // way into the library led nowhere: it gets its own window instead, as the typed notes do.
+        if libraryPanel == nil {
+            libraryPanel = NotesPanelController(
+                content: { [unowned self] in AnyView(LibraryWindowView(model: self.library)) },
+                loadFrame: { [weak self] in self?.host?.preferences.value(forKey: Self.libraryFrameKey, default: "") ?? "" },
+                saveFrame: { [weak self] in self?.host?.preferences.setValue($0, forKey: Self.libraryFrameKey) },
+                library: true)
+        }
+        libraryPanel?.show(title: "Meetings", focus: true)
+        library.refresh()
     }
+    private var libraryPanel: NotesPanelController?
+    private static let libraryFrameKey = "libraryPanelFrame"
 
     /// Settings -> Storage: adds meetings already in the Drive folder to the library (idempotent on the Python side).
     func importDriveMeetings() {
@@ -551,9 +566,10 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         case .ok(let folder, let warnings, let meetingID):
             if let meetingID { recentMeetingIDs[folder] = meetingID }
             library.refresh()
+            // HUD card buttons got no clicks in Droppy 16.0.2-nightly: ⌥⌘N opens the meeting while the card is up.
+            readyNotes = (folder, Date())
             notify("Notes ready", symbol: warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                   detail: warnings.isEmpty ? title : "\(title). \(warnings.joined(separator: " "))",
-                   action: ("Open", { [weak self] in self?.openNotes(folder) }))
+                   detail: (warnings.isEmpty ? title : "\(title). \(warnings.joined(separator: " "))") + " · ⌥⌘N to open")
             if inPerson { scheduleVoiceNotice(epoch) }
         case .failed(let why):
             // The shelf keeps its own Retry for this; a HUD button is unverified in a real Droppy.
@@ -624,7 +640,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     }
 
     func openNotes(_ folder: String) {
-        if let id = recentMeetingIDs[folder] { library.open(id); openLibrary(); return }
+        if let id = recentMeetingIDs[folder] { library.open(id, tab: .notes); openLibrary(); return }
         _ = host?.workspace.open(URL(fileURLWithPath: folder + "/notes.md"))
     }
 
@@ -971,7 +987,7 @@ private struct EavesdroppyWidget: View {
                     }
                 }
                 ForEach(library.recents) { m in
-                    Button { library.open(m.id); droplet.openLibrary() } label: { recentRow(m) }
+                    Button { library.open(m.id, tab: .notes); droplet.openLibrary() } label: { recentRow(m) }
                         .buttonStyle(.plain)
                 }
             }

@@ -70,6 +70,25 @@ import Testing
         view.cacheDisplay(in: view.bounds, to: rep)
         try #require(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: out))
     }
+
+    /// The meetings library in its own window (Droppy refuses the expanded surface for local builds), with demo meetings.
+    /// EAVESDROPPY_LIBRARY_SHOT=<file.png> swift test --filter libraryWindowShot
+    @Test func libraryWindowShot() throws {
+        guard let out = ProcessInfo.processInfo.environment["EAVESDROPPY_LIBRARY_SHOT"] else { return }
+        _ = NSApplication.shared
+        let droplet = EavesdroppyDroplet()
+        droplet.harnessDemo("meetings,askme")
+        let controller = NotesPanelController(content: { AnyView(LibraryWindowView(model: droplet.library)) }, loadFrame: { "" }, saveFrame: { _ in }, library: true)
+        let window = controller.makePanel()
+        window.title = "Meetings"
+        window.setFrame(NSRect(origin: .zero, size: NotesPanelController.librarySize), display: false)
+        let frameView = try #require(window.contentView?.superview)
+        frameView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let rep = try #require(frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
+        frameView.cacheDisplay(in: frameView.bounds, to: rep)
+        try #require(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: out))
+    }
 }
 
 @Suite struct ClockAndHeightTests {

@@ -151,9 +151,10 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
 
     // MARK: navigation
 
-    func open(_ id: Int, tab: DetailTab = .notes, turn: Int? = nil, seek: Int? = nil) {
+    /// `tab` nil keeps the tab already showing, so moving through the list compares like with like.
+    func open(_ id: Int, tab: DetailTab? = nil, turn: Int? = nil, seek: Int? = nil) {
         if openID != id { detail = nil; player.stop(); confirmingDelete = false }
-        openID = id; self.tab = tab; focusTurn = turn; pendingSeek = seek; detailError = nil
+        openID = id; if let tab { self.tab = tab }; focusTurn = turn; pendingSeek = seek; detailError = nil
         reloadDetail()
     }
 
@@ -269,6 +270,24 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     /// "This is…": the speaker is this known person (links the speaker, relabels the person's other speakers, teaches the voiceprint).
     func assignSpeaker(_ s: SpeakerRow, to p: PersonRow) {
         renameCommand(s, displayName(p), ["--person-id", String(p.id)])
+    }
+
+    /// "Is this you?": the speaker is the user. The enrolled person when there is one, else the user is made from this voice
+    /// (`rename-speaker --me`), so every later meeting names them. A meeting on speakers names but teaches no voice.
+    func markMe(_ s: SpeakerRow) {
+        let n = userName().trimmingCharacters(in: .whitespacesAndNewlines)
+        renameCommand(s, n.isEmpty ? (me?.name ?? "Me") : n, ["--me"])
+        if detail?.bleed == true { flash("Named you. This meeting was on speakers, so your voice is learned from the next one on headphones", isError: false) }
+    }
+
+    /// The user's own speaker in this meeting: linked to the enrolled person, or named Me by voiceprint.
+    func isMe(_ s: SpeakerRow) -> Bool { s.kind == "me" || (s.personID != nil && s.personID == me?.id) }
+
+    /// The voice to ask "Is this you?" about: nobody in this meeting is the user yet, and this is the mic voice heard most.
+    func likelyMe(in d: MeetingDetail) -> SpeakerRow? {
+        guard !d.speakers.contains(where: isMe) else { return nil }
+        let talk = { (s: SpeakerRow) in d.turns.filter { $0.speakerID == s.id }.reduce(0.0) { $0 + max($1.end - $1.start, 0) } }
+        return d.speakers.filter { $0.track == "mic" && $0.personID == nil && talk($0) >= 20 }.max { talk($0) < talk($1) }
     }
 
     /// A speaker the transcript's own introductions named ("I'm Priya"): kind "intro" until its voice is saved or it is renamed.

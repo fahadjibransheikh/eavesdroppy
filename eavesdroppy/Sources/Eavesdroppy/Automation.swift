@@ -21,7 +21,6 @@ import SwiftUI
     private var micSessionActive = false, micPrompted = false
     private var micWork: DispatchWorkItem?
     private var promptTimeout: DispatchWorkItem?
-    private var autoStartWork: DispatchWorkItem?
     private let callQ = DispatchQueue(label: "eavesdroppy.callaudio", qos: .utility)
     private let axQ = DispatchQueue(label: "eavesdroppy.ax", qos: .utility)
 
@@ -48,7 +47,6 @@ import SwiftUI
 
     func deactivate() {
         stopCalendar(); stopMic()
-        autoStartWork?.cancel(); autoStartWork = nil
         dismissPrompt()
         countdownEnd = nil
     }
@@ -56,7 +54,7 @@ import SwiftUI
     /// Prefs changed: start or stop the watchers to match.
     func reconcile() {
         if prefs.calendarPrompt && calendarStatus == .granted { startCalendar() } else { stopCalendar() }
-        if prefs.micPrompt { startMic() } else { stopMic() }
+        if prefs.micPrompt || autoStartOn { startMic() } else { stopMic() }
     }
 
     func refreshPermissions() {
@@ -111,7 +109,6 @@ import SwiftUI
 
     private func stopCalendar() {
         calendarTimer?.invalidate(); calendarTimer = nil
-        autoStartWork?.cancel(); autoStartWork = nil
     }
 
     private func pollCalendar() {
@@ -128,25 +125,12 @@ import SwiftUI
     private func offer(_ events: [CallEvent]) {
         guard let ev = events.first else { return }
         if droplet.recording || droplet.busy { events.forEach { prompted.insert($0.key) }; return }  // never while recording
-        if prefs.calendarAutoStart {
-            prompted.insert(ev.key)
-            scheduleAutoStart(ev)
+        if autoStartOn {
+            prompted.insert(ev.key)  // no prompt: the call app opening the mic starts it (micChanged -> checkMic)
         } else if !prompt.active {
             prompted.insert(ev.key)
             showEventPrompt(ev)
         }
-    }
-
-    private func scheduleAutoStart(_ ev: CallEvent) {
-        autoStartWork?.cancel()
-        let w = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.droplet.host != nil, self.prefs.calendarAutoStart, !self.droplet.recording, !self.droplet.busy else { return }
-                self.droplet.startRecording(title: ev.title, attendees: ev.attendees, autoStarted: true)
-            }
-        }
-        autoStartWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, ev.start.timeIntervalSinceNow), execute: w)
     }
 
     private func showEventPrompt(_ ev: CallEvent) {
@@ -195,7 +179,7 @@ import SwiftUI
     }
 
     private func checkMic(attempt: Int) {
-        guard micOn, micSessionActive, !micPrompted, prefs.micPrompt, droplet.host != nil else { return }
+        guard micOn, micSessionActive, !micPrompted, prefs.micPrompt || autoStartOn, droplet.host != nil else { return }
         if droplet.recording || droplet.busy || prompt.active { micPrompted = true; return }  // one prompt per call
         let ep = currentEpoch()
         callQ.async {
@@ -212,7 +196,9 @@ import SwiftUI
                     self.micPrompted = true
                     self.eventForCall { ev in
                         guard self.droplet.host != nil, !self.droplet.recording, !self.droplet.busy, !self.prompt.active else { return }
-                        self.showCallPrompt(app, event: ev)
+                        // Auto-start waits for the call itself, never the clock: a meeting that is skipped is never recorded.
+                        if let ev, self.autoStartOn { self.droplet.startRecording(title: ev.title, attendees: ev.attendees, autoStarted: true) }
+                        else if self.prefs.micPrompt { self.showCallPrompt(app, event: ev) }
                     }
                 }
             }
@@ -221,6 +207,9 @@ import SwiftUI
 
     /// A calendar event starting within 15 minutes (or begun in the last 30) names the call and brings its attendees.
     /// Only with Calendar access and the calendar setting on: nothing here reads the calendar for a user who has not asked.
+    /// Calendar auto-start: on, with the calendar setting it depends on.
+    private var autoStartOn: Bool { prefs.calendarPrompt && prefs.calendarAutoStart }
+
     func eventForCall(_ done: @escaping @MainActor (CallEvent?) -> Void) {
         guard prefs.calendarPrompt, calendarStatus == .granted else { done(nil); return }
         let ep = currentEpoch()

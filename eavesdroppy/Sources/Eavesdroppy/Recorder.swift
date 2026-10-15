@@ -154,6 +154,7 @@ final class Recorder: @unchecked Sendable {
     private var running = false
     private var observer: NSObjectProtocol?
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var tapListeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var micRestartPending = false, tapRestartPending = false
     private var restarts = 0  // capped so a device flapping (or a restart that re-triggers itself) can't loop forever
 
@@ -290,7 +291,6 @@ final class Recorder: @unchecked Sendable {
         let outDev = try getProp(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultSystemOutputDevice, initial: AudioObjectID(kAudioObjectUnknown))
         let outUID = try getProp(outDev, kAudioDevicePropertyDeviceUID, initial: "" as CFString) as String
         var asbd = try getProp(tapID, kAudioTapPropertyFormat, initial: AudioStreamBasicDescription())
-        guard let fmt = AVAudioFormat(streamDescription: &asbd) else { throw RecError("bad tap format") }
 
         let aggDesc: [String: Any] = [
             kAudioAggregateDeviceNameKey: "EavesdroppyTap",
@@ -304,6 +304,11 @@ final class Recorder: @unchecked Sendable {
         ]
         err = AudioHardwareCreateAggregateDevice(aggDesc as CFDictionary, &aggID)
         guard err == noErr else { throw RecError("AudioHardwareCreateAggregateDevice failed: OSStatus \(err)") }
+        // The aggregate runs at its output device's rate and resamples the tap to it, while the tap keeps reporting the
+        // rate it was made at (48 kHz with AirPods already in 24 kHz HFP). Label buffers with the rate they arrive at.
+        let aggRate = (try? getProp(aggID, kAudioDevicePropertyNominalSampleRate, initial: Float64(0))) ?? 0
+        if aggRate > 0 { asbd.mSampleRate = aggRate }
+        guard let fmt = AVAudioFormat(streamDescription: &asbd) else { throw RecError("bad tap format") }
 
         let w: TrackWriter  // a restart keeps appending to the same file (the writer converts if the format changed)
         if let existing = system { w = existing } else { w = try TrackWriter(url: dir.appendingPathComponent("system.wav"), format: fmt); wire(w); system = w }
@@ -321,10 +326,23 @@ final class Recorder: @unchecked Sendable {
         guard err == noErr else { throw RecError("AudioDeviceCreateIOProcIDWithBlock failed: OSStatus \(err)") }
         err = AudioDeviceStart(aggID, procID)
         guard err == noErr else { throw RecError("AudioDeviceStart failed: OSStatus \(err)") }
+        // The IO block labels every buffer with `fmt`. When the output device changes rate without stopping being the
+        // default (AirPods dropping to 24 kHz HFP once a call opens the mic), buffers at the new rate would be written as
+        // `fmt` and the call track would play back at the wrong speed, so a rate change restarts the tap with the new rate.
+        listenTap(outDev, kAudioDevicePropertyNominalSampleRate)
+        listenTap(aggID, kAudioDevicePropertyNominalSampleRate)
         log("system tap started: \(fmt) out=\(outUID) excluded-self=\(me != kAudioObjectUnknown)")
     }
 
+    private func listenTap(_ obj: AudioObjectID, _ sel: AudioObjectPropertySelector) {
+        var addr = AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.scheduleTapRestart("call audio rate changed") }
+        if AudioObjectAddPropertyListenerBlock(obj, &addr, audioQ, block) == noErr { tapListeners.append((obj, addr, block)) }
+    }
+
     private func teardownTap() {
+        for (obj, var addr, block) in tapListeners { AudioObjectRemovePropertyListenerBlock(obj, &addr, audioQ, block) }
+        tapListeners = []
         if aggID != kAudioObjectUnknown {
             AudioDeviceStop(aggID, procID)
             if let p = procID { AudioDeviceDestroyIOProcID(aggID, p); procID = nil }

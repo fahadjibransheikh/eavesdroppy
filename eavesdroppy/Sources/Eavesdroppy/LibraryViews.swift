@@ -63,7 +63,8 @@ struct LibrarySurface: View {
                 Text(s).font(.system(size: 11)).foregroundStyle(model.statusIsError ? StateColor.warning : secondary).lineLimit(2)
                     .padding(.horizontal, DroppySpacing.smd).padding(.vertical, DroppySpacing.xs)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(Color.black))  // the surface's own black, so the list does not show through
+                    // opaque, so the list does not show through; the window's own grey, not a black hole in it
+                    .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous).fill(Color(white: 0.2)))
                     .transition(DroppyTransition.element)
             }
         }

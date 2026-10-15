@@ -187,7 +187,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
         if host.environment.isHarness, let demo = ProcessInfo.processInfo.environment["EAVESDROPPY_HARNESS_DEMO"] { harnessDemo(demo) }
         // Needs `global-shortcuts`; a host without it refuses and the droplet carries on. 45 = kVK_ANSI_N.
         host.shortcuts.register(
-            id: "show-notes", title: "Show meeting notes",
+            id: "show-notes", title: "Open Eavesdroppy",
             defaultShortcut: DropletKeyboardShortcut(keyCode: 45, modifiers: NSEvent.ModifierFlags([.option, .command]).rawValue)
         ) { [weak self] in
             guard let self else { return }
@@ -478,7 +478,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
                 saveFrame: { [weak self] in self?.host?.preferences.setValue($0, forKey: Self.libraryFrameKey) },
                 library: true)
         }
-        libraryPanel?.show(title: "Meetings", focus: true)
+        libraryPanel?.show(title: "Eavesdroppy", focus: true)
         library.refresh()
     }
     private var libraryPanel: NotesPanelController?
@@ -908,8 +908,8 @@ private struct EavesdroppyWidget: View {
                     .foregroundStyle(AdaptiveColors.notchSurfacePrimaryText)
                     .transition(DroppyTransition.element)
             } else if !context.isCompact {
-                Button { droplet.openLibrary() } label: { Image(systemName: "books.vertical") }
-                    .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Open meetings")
+                Button { droplet.openLibrary() } label: { Image(systemName: "macwindow") }
+                    .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Open Eavesdroppy")
             }
             overflow
         }
@@ -918,7 +918,7 @@ private struct EavesdroppyWidget: View {
 
     private var overflow: some View {
         Menu {
-            Button("Open meetings") { droplet.openLibrary() }
+            Button("Open Eavesdroppy") { droplet.openLibrary() }
             Button("Import recording…") { droplet.chooseImport() }
             Button("Open meetings folder") { droplet.openFolder() }
         } label: { Image(systemName: "ellipsis") }
@@ -1004,8 +1004,14 @@ private struct EavesdroppyWidget: View {
             Image(systemName: "doc.text").font(.system(size: 11)).frame(width: 14)
             Text(m.title).font(.system(size: 12)).lineLimit(1)
             Spacer(minLength: DroppySpacing.sm)
+            if m.openActions > 0 {  // the same count chip as the meetings window
+                Text("\(m.openActions)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule(style: .continuous).fill(AdaptiveColors.notchSurfaceCardHoverFill))
+                    .accessibilityLabel("\(m.openActions) open action\(m.openActions == 1 ? "" : "s")")
+            }
             if !context.isCompact {
-                Text(m.openActions > 0 ? "\(m.openActions) action\(m.openActions == 1 ? "" : "s")" : Fmt.when(m.start))
+                Text(Fmt.when(m.start))
                     .font(.system(size: 11)).monospacedDigit().foregroundStyle(AdaptiveColors.notchSurfaceTertiaryText).lineLimit(1)
             }
         }
@@ -1080,7 +1086,7 @@ private struct MenuBarContent: View {
                 MenuRow(title: "Stop", disabled: droplet.busy) { droplet.stopRecording(process: true) }
             } else {
                 MenuRow(title: "Record", disabled: droplet.busy) { droplet.startRecording() }
-                MenuRow(title: "Open meetings") { droplet.openLibrary() }
+                MenuRow(title: "Open Eavesdroppy") { droplet.openLibrary() }
                 if let status { MenuInfoRow(text: status.text, warn: status.warn) }
                 else { MenuRow(title: "Settings…") { droplet.openSettingsPane() } }
             }

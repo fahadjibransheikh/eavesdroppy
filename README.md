@@ -4,7 +4,7 @@ Bot-free meeting notes for Mac, built as a [Droppy](https://getdroppy.app) dropl
 
 ## What it does
 
-- **Record** from the shelf widget, the menu bar item, or the ⌥⌘N "Show meeting notes" shortcut. It also offers to record before calendar events and when a call app starts using the microphone. A live activity shows the timer in the notch.
+- **Record** from the shelf widget, the menu bar item, or the ⌥⌘N "Open Eavesdroppy" shortcut. It also offers to record before calendar events and when a call app starts using the microphone. A live activity shows the timer in the notch.
 - **Type your own notes** while you talk, in the notch or the menu bar. They are merged into the generated notes and marked "(from your notes)".
 - **Transcribe locally** with Parakeet (via [FluidAudio](https://github.com/FluidInference/FluidAudio)), reusing Droppy's own model and custom dictionary.
 - **Remove speaker echo** when you're on speakers instead of headphones (LocalVQE), so the call isn't transcribed twice.

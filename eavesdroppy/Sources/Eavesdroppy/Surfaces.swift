@@ -7,7 +7,7 @@ extension EavesdroppyDroplet: ExpandedSurfaceProviding {
     public var expandedSurfaces: [ExpandedSurfaceDescriptor] {
         // The user reads and types here (Ask, renames) with the pointer elsewhere, so the shelf must not auto-collapse.
         // Clicking outside still closes it, and browsing loses nothing.
-        [ExpandedSurfaceDescriptor(id: Self.surfaceID, title: "Meetings", systemImage: "waveform",
+        [ExpandedSurfaceDescriptor(id: Self.surfaceID, title: "Eavesdroppy", systemImage: "waveform",
                                    suppresses: [.shelfWidgets, .autoCollapse])]
     }
 

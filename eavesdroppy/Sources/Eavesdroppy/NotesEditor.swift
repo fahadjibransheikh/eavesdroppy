@@ -34,7 +34,7 @@ struct TemplateMenu: View {
             }
         }
         .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
-        .accessibilityLabel("Notes template")
+        .accessibilityLabel("Notes template").help("Notes template: how the notes are written when the meeting ends")
     }
 }
 
@@ -57,6 +57,6 @@ struct LanguageMenu: View {
             }
         }
         .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
-        .accessibilityLabel("Meeting language")
+        .accessibilityLabel("Meeting language").help("Meeting language: what the transcript is written in")
     }
 }

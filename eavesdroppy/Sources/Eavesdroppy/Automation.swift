@@ -221,7 +221,7 @@ import SwiftUI
 
     /// A calendar event starting within 15 minutes (or begun in the last 30) names the call and brings its attendees.
     /// Only with Calendar access and the calendar setting on: nothing here reads the calendar for a user who has not asked.
-    private func eventForCall(_ done: @escaping @MainActor (CallEvent?) -> Void) {
+    func eventForCall(_ done: @escaping @MainActor (CallEvent?) -> Void) {
         guard prefs.calendarPrompt, calendarStatus == .granted else { done(nil); return }
         let ep = currentEpoch()
         let now = Date()

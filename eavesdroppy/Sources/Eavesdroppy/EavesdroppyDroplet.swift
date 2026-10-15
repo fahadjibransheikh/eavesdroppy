@@ -258,7 +258,11 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
 
     func startRecording() {
         let t = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        startRecording(title: t.isEmpty ? "Meeting" : t, attendees: [], autoStarted: false)
+        guard t.isEmpty else { startRecording(title: t, attendees: [], autoStarted: false); return }
+        // No typed title: a calendar call event around now names the meeting and brings its attendees, as the prompts do.
+        automation.eventForCall { [weak self] ev in
+            self?.startRecording(title: ev?.title ?? "Meeting", attendees: ev?.attendees ?? [], autoStarted: false)
+        }
     }
 
     /// `attendees` (calendar names or emails) go into meta.json from the first write. `autoStarted`: nobody clicked.

@@ -463,10 +463,14 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     func openSettingsPane() { _ = host?.workspace.openSettings() }
 
     func openLibrary() {
-        presentation = host?.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
-        guard presentation == nil, host != nil else { return }
-        // Droppy refuses the surface for approved local builds ("does not publish a surface with that id"), so every
-        // way into the library led nowhere: it gets its own window instead, as the typed notes do.
+        guard let host else { return }
+        // Droppy (16.0.2-nightly) refuses the surface for approved local builds, and on 2026-10-15 accepted the request
+        // without ever showing it, so no way into the library opened anything. Outside the harness (whose shots need
+        // the surface) the library is its own window, as the typed notes are.
+        if host.environment.isHarness {
+            presentation = host.notchSurface.presentExpandedSurface(ExpandedSurfacePresentationRequest(surfaceID: Self.surfaceID))
+            return
+        }
         if libraryPanel == nil {
             libraryPanel = NotesPanelController(
                 content: { [unowned self] in AnyView(LibraryWindowView(model: self.library)) },

@@ -30,11 +30,19 @@ struct LibrarySurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            header
-            // Find on top, ask at the bottom: the list gets the height, and one field never does two jobs.
-            Group {
-                if model.openID == nil { MeetingList(model: model).transition(DroppyTransition.expandedContent) }
-                else { MeetingDetailView(model: model).transition(DroppyTransition.expandedContent) }
+            // The list stays beside the open meeting, so moving between meetings is one click and never a back-and-forth.
+            // Find on top of the list, ask at the bottom: one field never does two jobs.
+            HStack(alignment: .top, spacing: DroppySpacing.xl) {
+                MeetingList(model: model).frame(width: 236)
+                Group {
+                    if model.openID != nil {
+                        MeetingDetailView(model: model).id(model.openID).transition(DroppyTransition.expandedContent)
+                    } else if !model.meetings.isEmpty {
+                        Text("Pick a meeting").font(.system(size: 12)).foregroundStyle(tertiary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .overlay(alignment: .bottom) { banners }
@@ -59,20 +67,6 @@ struct LibrarySurface: View {
                     .transition(DroppyTransition.element)
             }
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: DroppySpacing.xsm) {
-            if model.openID != nil {
-                Button { model.back() } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(DroppyCircleButtonStyle(size: 24)).accessibilityLabel("Back to meetings")
-            } else {
-                Image(systemName: "waveform").font(.system(size: 12, weight: .medium))
-            }
-            Text("Meetings").font(.system(size: 12, weight: .semibold))
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(secondary)
     }
 }
 
@@ -198,10 +192,16 @@ private struct AskBar: View {
 private extension AskBar {
     /// Where Ask looks: this meeting (when one is open) or all of them, or everything about one person.
     var scopeMenu: some View {
-        let auto = model.openID == nil ? "All meetings" : "This meeting"
+        let all = model.openID == nil || model.askAll
+        let auto = all ? "All meetings" : "This meeting"
         return Menu {
-            Button { model.setAskPerson(nil) } label: {
-                if model.askPerson == nil { Label(auto, systemImage: "checkmark") } else { Text(auto) }
+            if model.openID != nil {
+                Button { model.setAskPerson(nil) } label: {
+                    if model.askPerson == nil && !all { Label("This meeting", systemImage: "checkmark") } else { Text("This meeting") }
+                }
+            }
+            Button { model.setAskPerson(nil); model.askAll = true } label: {
+                if model.askPerson == nil && all { Label("All meetings", systemImage: "checkmark") } else { Text("All meetings") }
             }
             Menu("About a person…") {
                 ForEach(model.people) { p in
@@ -272,6 +272,16 @@ private struct MeetingList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
+            HStack(spacing: DroppySpacing.xsm) {
+                Image(systemName: "waveform").font(.system(size: 12, weight: .medium))
+                Text("Meetings").font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 0)
+                if model.loaded, model.query.isEmpty, !model.meetings.isEmpty {
+                    Text("\(model.meetings.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(tertiary)
+                }
+            }
+            .foregroundStyle(secondary)
+            .padding(.horizontal, DroppySpacing.xs)
             HStack(spacing: DroppySpacing.sm) {
                 Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(tertiary)
                 TextField("Search meetings", text: $model.query)
@@ -288,18 +298,22 @@ private struct MeetingList: View {
                 empty
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: DroppySpacing.xs) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(sections, id: \.title) { sec in
                             if let t = sec.title {
-                                Text(t).font(.system(size: 11)).foregroundStyle(tertiary).padding(.top, DroppySpacing.xs).padding(.leading, DroppySpacing.xs)
+                                Text(t).font(.system(size: 11, weight: .medium)).foregroundStyle(tertiary)
+                                    .padding(.top, DroppySpacing.sm).padding(.bottom, 2).padding(.leading, DroppySpacing.smd)
                             }
                             ForEach(sec.meetings) { m in
-                                Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : .notes, turn: m.hitTurnIdx) } label: { MeetingRow(m: m) }
-                                    .buttonStyle(.plain)
+                                Button { model.open(m.id, tab: m.hitTurnIdx != nil ? .transcript : .notes, turn: m.hitTurnIdx) } label: {
+                                    MeetingRow(m: m, selected: model.openID == m.id, dayShown: sec.title == "Today" || sec.title == "Yesterday")
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
                 }
+                .scrollIndicators(.never)
             }
         }
     }
@@ -320,23 +334,41 @@ private struct MeetingList: View {
 
 private struct MeetingRow: View {
     let m: MeetingSummary
+    let selected: Bool
+    /// The section header already says "Today" or "Yesterday": the row then shows only the time.
+    let dayShown: Bool
+    @State private var hovering = false
+
+    private var when: String {
+        let w = Fmt.when(m.start)
+        guard dayShown, let comma = w.range(of: ", ") else { return w }
+        return String(w[comma.upperBound...])
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: DroppySpacing.sm) {
-                Text(m.title).font(.system(size: 13, weight: .medium)).foregroundStyle(primary).lineLimit(1)
-                Spacer(minLength: DroppySpacing.md)
+            HStack(alignment: .firstTextBaseline, spacing: DroppySpacing.xsm) {
+                Text(m.title).font(.system(size: 12.5, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? primary : primary.opacity(0.88)).lineLimit(1)
+                Spacer(minLength: DroppySpacing.xsm)
                 if m.openActions > 0 {
-                    Text("\(m.openActions) action\(m.openActions == 1 ? "" : "s")").font(.system(size: 11)).monospacedDigit().foregroundStyle(secondary)
+                    Text("\(m.openActions)").font(.system(size: 10, weight: .semibold)).monospacedDigit().foregroundStyle(secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule(style: .continuous).fill(AdaptiveColors.notchSurfaceCardHoverFill))
+                        .accessibilityLabel("\(m.openActions) open action\(m.openActions == 1 ? "" : "s")")
                 }
             }
-            Text("\(Fmt.when(m.start)) · \(m.duration > 0 ? Fmt.length(m.duration) : "No speech detected")\(m.summaryStatus == "failed" ? " · notes failed" : "")")
-                .font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
+            Text("\(when) · \(m.duration > 0 ? Fmt.length(m.duration) : "No speech detected")\(m.summaryStatus == "failed" ? " · notes failed" : "")")
+                .font(.system(size: 11)).monospacedDigit().foregroundStyle(tertiary).lineLimit(1)
             if let s = m.snippet { snippet(s, ts: m.hitTS) }
         }
+        .padding(.horizontal, DroppySpacing.smd).padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rowBox()
+        .background(RoundedRectangle(cornerRadius: DroppyRadius.ms, style: .continuous)
+            .fill(selected ? AdaptiveColors.notchSurfaceCardHoverFill : (hovering ? AdaptiveColors.notchSurfaceCardFill : .clear)))
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func snippet(_ s: String, ts: String?) -> some View {
@@ -358,18 +390,22 @@ private struct MeetingDetailView: View {
 
     var body: some View {
         if let d = model.detail {
-            VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-                TitleRow(model: model, title: d.summary.title)
-                Text(meta(d)).font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
-                HStack(spacing: DroppySpacing.xsm) {
-                    ForEach(DetailTab.allCases, id: \.self) { t in tabButton(t, d) }
-                    Spacer(minLength: DroppySpacing.sm)
-                    PlayerControl(model: model, player: model.player, hasAudio: d.summary.audioPath != nil)
+            VStack(alignment: .leading, spacing: DroppySpacing.md) {
+                VStack(alignment: .leading, spacing: 3) {
+                    TitleRow(model: model, d: d)
+                    Text(meta(d)).font(.system(size: 11)).foregroundStyle(tertiary).lineLimit(1)
                 }
-                .droppyFlatGlassControls()
+                HStack(spacing: DroppySpacing.sm) {
+                    TabStrip(model: model, d: d)
+                    Spacer(minLength: DroppySpacing.sm)
+                    if let b = model.busy {
+                        ProgressView().controlSize(.small)
+                        Text(b).font(.system(size: 11)).foregroundStyle(secondary).lineLimit(1)
+                    }
+                }
                 Group {
                     switch model.tab {
-                    case .notes: NotesTab(model: model, d: d)
+                    case .notes, .mine: NotesTab(model: model, d: d)
                     case .transcript: TranscriptTab(model: model, d: d)
                     case .speakers: SpeakersTab(model: model, d: d)
                     case .actions: ActionsTab(model: model, d: d)
@@ -388,44 +424,79 @@ private struct MeetingDetailView: View {
         ([Fmt.when(d.summary.start)] + (d.summary.duration > 0 ? [Fmt.length(d.summary.duration)] : []) + (d.attendees.isEmpty ? [] : [d.attendees.joined(separator: ", ")]))
             .joined(separator: " · ")
     }
+}
 
-    @ViewBuilder private func tabButton(_ t: DetailTab, _ d: MeetingDetail) -> some View {
-        let n = t == .actions ? d.actions.filter { !$0.done }.count : 0
-        let label = n > 0 ? "\(t.rawValue) \(n)" : t.rawValue
-        if model.tab == t {
-            Button(label) { model.tab = t }.buttonStyle(DroppyAccentButtonStyle(size: .small))
-        } else {
-            Button(label) { model.tab = t }.buttonStyle(DroppyQuietButtonStyle(size: .small))
+/// One row of tabs; the open one is a raised chip, the rest are plain labels. "My notes" appears only when there are some.
+private struct TabStrip: View {
+    @ObservedObject var model: LibraryModel
+    let d: MeetingDetail
+
+    private var tabs: [DetailTab] {
+        DetailTab.allCases.filter { $0 != .mine || !d.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs, id: \.self) { t in
+                let on = model.tab == t || (t == .notes && model.tab == .mine && !tabs.contains(.mine))
+                let n = t == .actions ? d.actions.filter { !$0.done }.count : 0
+                Button { model.tab = t } label: {
+                    HStack(spacing: 4) {
+                        Text(t.rawValue).font(.system(size: 12, weight: on ? .semibold : .medium))
+                        if n > 0 { Text("\(n)").font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(tertiary) }
+                    }
+                    .foregroundStyle(on ? primary : secondary)
+                    .padding(.horizontal, DroppySpacing.smd).padding(.vertical, 5)
+                    .background(Capsule(style: .continuous).fill(on ? AdaptiveColors.notchSurfaceCardHoverFill : .clear))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
         }
+        .padding(2)
+        .background(Capsule(style: .continuous).fill(AdaptiveColors.notchSurfaceCardFill))
     }
 }
 
 private struct TitleRow: View {
     @ObservedObject var model: LibraryModel
-    let title: String
+    let d: MeetingDetail
     @State private var editing = false
     @State private var draft = ""
+
+    private var title: String { d.summary.title }
 
     var body: some View {
         HStack(spacing: DroppySpacing.sm) {
             if editing {
                 TextField("Title", text: $draft)
-                    .textFieldStyle(.plain).font(.system(size: 14, weight: .semibold)).foregroundStyle(primary)
+                    .textFieldStyle(.plain).font(.system(size: 17, weight: .semibold)).foregroundStyle(primary)
                     .onSubmit { commit() }.takesKeyboard(model).fieldBox()
                 Button("Save") { commit() }.buttonStyle(DroppyAccentButtonStyle(size: .small))
                 Button("Cancel") { editing = false }.buttonStyle(DroppyQuietButtonStyle(size: .small))
             } else {
-                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(primary).lineLimit(1)
-                Button { draft = title; editing = true; model.requestKeyboard() } label: { Image(systemName: "pencil") }
-                    .buttonStyle(DroppyCircleButtonStyle(size: 20)).accessibilityLabel("Rename meeting")
-                Spacer(minLength: 0)
-                if model.busy != nil { ProgressView().controlSize(.small) }
+                Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(primary).lineLimit(1)
+                    .onTapGesture(count: 2) { startEditing() }
+                    .help("Double-click to rename")
+                Spacer(minLength: DroppySpacing.sm)
                 // Two clicks stay (the delete is not undoable): "Delete" in the menu arms it, this button confirms for 4 s.
                 if model.confirmingDelete {
                     Button("Confirm delete") { model.delete() }
                         .buttonStyle(DroppyQuietButtonStyle(size: .small, destructive: true)).transition(DroppyTransition.element)
                 }
+                PlayerControl(model: model, player: model.player, hasAudio: d.summary.audioPath != nil)
                 Menu {
+                    Button("Rename…") { startEditing() }
+                    Menu("Rewrite notes as") {
+                        ForEach(NoteTemplate.all, id: \.id) { t in
+                            Button { model.regenTemplate = t.id; model.regenerate() } label: {
+                                if d.summary.template == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
+                            }
+                        }
+                    }
+                    .disabled(model.busy != nil)
+                    Divider()
                     Button("Show in Finder") { model.openInDrive() }
                     Button("Copy transcript") { model.copyTranscript() }
                     Divider()
@@ -438,6 +509,7 @@ private struct TitleRow: View {
         .onChange(of: title) { _, _ in editing = false }
     }
 
+    private func startEditing() { draft = title; editing = true; model.requestKeyboard() }
     private func commit() { model.rename(draft); editing = false }
 }
 
@@ -466,68 +538,44 @@ private struct PlayerControl: View {
 
 // MARK: Notes
 
+/// The generated notes, or (the My notes tab) what the user typed during the meeting. Read like a document: one
+/// comfortable column, never the full width of a wide surface.
 private struct NotesTab: View {
     @ObservedObject var model: LibraryModel
     let d: MeetingDetail
-    @State private var mine = false  // "My notes": what the user typed during the meeting
 
-    private var hasMine: Bool { !d.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var mine: Bool { model.tab == .mine && !d.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-                if hasMine {
-                    HStack(spacing: DroppySpacing.xsm) {
-                        choice("Notes", selected: !mine) { mine = false }
-                        choice("My notes", selected: mine) { mine = true }
-                        Spacer(minLength: 0)
-                    }
-                    .droppyFlatGlassControls()
-                }
-                if mine && hasMine { MarkdownText(md: d.userNotes) } else { generated }
+            Group {
+                if mine { MarkdownText(md: d.userNotes, size: 13) }
+                else if d.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { emptyNotes }
+                else { MarkdownText(md: d.notes, size: 13) }
             }
+            .frame(maxWidth: 600, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, DroppySpacing.md)
         }
+        .scrollIndicators(.never)
     }
 
-    @ViewBuilder private func choice(_ title: String, selected: Bool, _ action: @escaping () -> Void) -> some View {
-        if selected { Button(title, action: action).buttonStyle(DroppyAccentButtonStyle(size: .small)) }
-        else { Button(title, action: action).buttonStyle(DroppyQuietButtonStyle(size: .small)) }
-    }
-
-    private var generated: some View {
+    private var emptyNotes: some View {
         VStack(alignment: .leading, spacing: DroppySpacing.sm) {
-            HStack(spacing: DroppySpacing.sm) {
-                Text("Template").font(.system(size: 11)).foregroundStyle(tertiary)
-                Menu {
-                    ForEach(NoteTemplate.all, id: \.id) { t in
-                        Button { model.regenTemplate = t.id } label: {
-                            if model.regenTemplate == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
-                        }
-                    }
-                } label: { Text(NoteTemplate.name(model.regenTemplate)).font(.system(size: 11, weight: .medium)) }
-                    .menuStyle(.button).buttonStyle(DroppyQuietButtonStyle(size: .small)).fixedSize()
-                Button("Regenerate") { model.regenerate() }
+            Text(emptyText).font(.system(size: 12)).foregroundStyle(secondary)
+            if d.summary.summaryStatus != "pending" {
+                Button("Write notes") { model.regenTemplate = d.summary.template; model.regenerate() }
                     .buttonStyle(DroppyQuietButtonStyle(size: .small)).disabled(model.busy != nil)
-                if let b = model.busy {
-                    ProgressView().controlSize(.small)
-                    Text(b).font(.system(size: 11)).foregroundStyle(secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .droppyFlatGlassControls()
-            if d.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(emptyNotes).font(.system(size: 12)).foregroundStyle(secondary)
-            } else {
-                MarkdownText(md: d.notes)
             }
         }
+        .droppyFlatGlassControls()
     }
 
-    private var emptyNotes: String {
+    private var emptyText: String {
         switch d.summary.summaryStatus {
-        case "failed": return "Notes couldn't be generated. Pick a template and regenerate, or read the transcript."
+        case "failed": return "Notes couldn't be written. Try again, pick another template from the ⋯ menu, or read the transcript."
         case "pending": return "Notes are still being written…"
-        default: return "No notes yet. Regenerate them from the transcript."
+        default: return "No notes yet. They can be written from the transcript."
         }
     }
 }

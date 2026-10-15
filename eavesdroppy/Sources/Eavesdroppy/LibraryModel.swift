@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-enum DetailTab: String, CaseIterable { case notes = "Notes", transcript = "Transcript", speakers = "Speakers", actions = "Actions" }
+enum DetailTab: String, CaseIterable { case notes = "Notes", mine = "My notes", transcript = "Transcript", speakers = "Speakers", actions = "Actions" }
 
 enum AskState: Equatable { case idle, running(String), answer(String, String), failed(String) }
 
@@ -49,6 +49,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     @Published private(set) var people: [PersonRow] = []
     /// Ask scope "About a person…": `ask QUESTION --person-id N`. nil = this meeting when one is open, else all meetings.
     @Published private(set) var askPerson: PersonRow?
+    /// Ask across every meeting even while one is open (the list and the meeting are on screen together).
+    @Published var askAll = false
     /// After an export that has somewhere to look at (a Linear issue): shown as a link under the header.
     @Published var exportLink: (label: String, url: URL)?
     /// A Linear export is waiting for the user to pick a team (see LinearExporter).
@@ -98,6 +100,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
                 case .success(let m):
                     self.meetings = m; self.listError = nil
                     if q.isEmpty { self.recents = Array(m.prefix(3)) }
+                    // The list and one meeting share the surface: with nothing open, the newest meeting is.
+                    if self.openID == nil, q.isEmpty, let first = m.first { self.open(first.id) }
                 case .failure(let e): self.listError = "\(e)"
                 }
             }
@@ -162,7 +166,8 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
     /// Harness only (EAVESDROPPY_HARNESS_DEMO): a meeting on screen without a database behind it.
     func demo(detail d: MeetingDetail, people p: [PersonRow], tab t: DetailTab, askPerson a: PersonRow? = nil) {
         demoMode = true
-        meetings = [d.summary]; recents = meetings; loaded = true; openID = d.summary.id; detail = d; people = p; tab = t; askPerson = a
+        if !meetings.contains(where: { $0.id == d.summary.id }) { meetings = [d.summary] + meetings }
+        recents = Array(meetings.prefix(3)); loaded = true; openID = d.summary.id; detail = d; people = p; tab = t; askPerson = a
     }
 
     /// Harness only: a list on screen (no meetings = the empty state), with an optional status line.
@@ -374,10 +379,10 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
 
     // MARK: Ask
 
-    var askScope: String { askPerson.map { "about \(displayName($0))" } ?? (openID == nil ? "all meetings" : "this meeting") }
+    var askScope: String { askPerson.map { "about \(displayName($0))" } ?? (openID == nil || askAll ? "all meetings" : "this meeting") }
 
     /// nil: back to the automatic scope.
-    func setAskPerson(_ p: PersonRow?) { askPerson = p }
+    func setAskPerson(_ p: PersonRow?) { askPerson = p; askAll = false }
 
     func askQuestion() {
         let q = askText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -386,7 +391,7 @@ enum RenameScope: String, CaseIterable { case plain, samePerson, newPerson }
         // argparse would read a leading "-" as an option
         var args = ["ask", q.hasPrefix("-") ? "Question: " + q : q]
         if let p = askPerson { args += ["--person-id", String(p.id)] }  // the CLI rejects both scopes at once
-        else if let id = openID { args += ["--meeting-id", String(id)] }
+        else if let id = openID, !askAll { args += ["--meeting-id", String(id)] }
         args += userNameArgs
         let call = PipelineCall()
         askCall = call; ask = .running(q)

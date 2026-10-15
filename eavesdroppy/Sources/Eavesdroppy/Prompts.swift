@@ -19,6 +19,9 @@ import SwiftUI
 
     var active: Bool { kind != nil }
 
+    /// The card's last line: how to take the primary action without clicking the card.
+    var hint: String { kind == .ending ? "Press ⌥⌘N to keep recording" : "Press ⌥⌘N, or Record on the shelf" }
+
     func show(_ kind: Kind, title: String, subtitle: String, primary: String, secondary: String, symbol: String,
               onPrimary: @escaping () -> Void, onSecondary: @escaping () -> Void) {
         self.kind = kind; self.title = title; self.subtitle = subtitle; self.primary = primary; self.secondary = secondary
@@ -30,10 +33,10 @@ import SwiftUI
     func clear() { kind = nil; onPrimary = {}; onSecondary = {} }
 
     /// Card height for the HUD request.
-    static let cardHeight: CGFloat = 78
+    static let cardHeight: CGFloat = 70
 }
 
-/// The HUD card: glyph, title and detail on top, the two buttons on the right underneath.
+/// The HUD card: glyph, title and detail on top, how to act underneath.
 struct PromptCard: View {
     @ObservedObject var model: PromptModel
 
@@ -53,11 +56,10 @@ struct PromptCard: View {
                 .accessibilityLabel(model.title).accessibilityValue(model.subtitle)
                 Spacer(minLength: 0)
             }
-            HStack(spacing: DroppySpacing.sm) {
-                Spacer(minLength: 0)
-                Button(model.secondary) { model.onSecondary() }.buttonStyle(DroppyQuietButtonStyle(size: .small))
-                Button(model.primary) { model.onPrimary() }.buttonStyle(DroppyAccentButtonStyle(color: model.kind == .ending ? .orange : .red, size: .small))
-            }
+            // Buttons in the HUD card did not receive clicks in Droppy 16.0.2-nightly, so the card says
+            // how to act instead, and the shortcut and the shelf's Record button carry the action.
+            Text(verbatim: model.hint).font(.system(size: 11)).lineLimit(1)
+                .foregroundStyle(AdaptiveColors.notchSurfaceTertiaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

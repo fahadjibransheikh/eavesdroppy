@@ -189,7 +189,8 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
             defaultShortcut: DropletKeyboardShortcut(keyCode: 45, modifiers: NSEvent.ModifierFlags([.option, .command]).rawValue)
         ) { [weak self] in
             guard let self else { return }
-            if self.recording { self.showNotes() } else { self.openLibrary() }
+            if self.automation.prompt.active { self.automation.prompt.onPrimary() }  // the notch prompt's card can't be clicked
+            else if self.recording { self.showNotes() } else { self.openLibrary() }
         }
         log("Eavesdroppy activated, sessions at \(sessionsDir.path)")
     }
@@ -259,6 +260,7 @@ public final class EavesdroppyDroplet: NSObject, ObservableObject, Droplet {
     func startRecording() {
         let t = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.isEmpty else { startRecording(title: t, attendees: [], autoStarted: false); return }
+        if automation.prompt.active, automation.prompt.kind != .ending { automation.prompt.onPrimary(); return }  // Record answers the prompt
         // No typed title: a calendar call event around now names the meeting and brings its attendees, as the prompts do.
         automation.eventForCall { [weak self] ev in
             self?.startRecording(title: ev?.title ?? "Meeting", attendees: ev?.attendees ?? [], autoStarted: false)

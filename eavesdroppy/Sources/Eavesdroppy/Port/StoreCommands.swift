@@ -8,7 +8,7 @@ enum StoreCommands {
 
     private static let specs: [String: Spec] = [
         "rename-meeting": Spec(positionals: [("id", true), ("title", false)]),
-        "rename-speaker": Spec(positionals: [("speaker_id", true), ("name", false)], options: [("--person-id", true)], flags: ["--new-person"]),
+        "rename-speaker": Spec(positionals: [("speaker_id", true), ("name", false)], options: [("--person-id", true)], flags: ["--new-person", "--me"]),
         "set-user-notes": Spec(positionals: [("id", true)], flags: ["--clear"]),
         "delete": Spec(positionals: [("id", true)]),
         "set-action-done": Spec(positionals: [("action_id", true)], flags: ["--undone"]),
@@ -70,8 +70,8 @@ enum StoreCommands {
             if cmd == "set-user-notes", !a.flag.contains("--clear"), PyText.strip(stdin ?? "").isEmpty {
                 throw StoreError("no text on stdin (use --clear to empty the notes)")
             }
-            if cmd == "rename-speaker", a.opt["--person-id"] != nil, a.flag.contains("--new-person") {
-                throw StoreError("use either --person-id or --new-person, not both")
+            if cmd == "rename-speaker", [a.opt["--person-id"] != nil, a.flag.contains("--new-person"), a.flag.contains("--me")].filter({ $0 }).count > 1 {
+                throw StoreError("use only one of --person-id, --new-person and --me")
             }
             guard PyPath.isDir(containerPath) else { throw StoreError("container not found: \(containerPath)") }
             let db = try StoreDB(path: URL(fileURLWithPath: containerPath).appendingPathComponent("library.db"))
@@ -84,7 +84,7 @@ enum StoreCommands {
                 result = ["ok": true]
             case "rename-speaker":
                 let ids = try renameSpeaker(db, speakerID: int(0), name: a.pos[1], personID: a.opt["--person-id"].flatMap { Int($0) },
-                                            newPerson: a.flag.contains("--new-person"))
+                                            newPerson: a.flag.contains("--new-person"), me: a.flag.contains("--me"))
                 try StoreMirror.sync(db, ids, outRoot: out, warn: warn)
                 result = ["meetings": ids]
             case "set-user-notes":
@@ -116,8 +116,9 @@ enum StoreCommands {
     }
 
     /// cmd_rename_speaker: relabel one speaker and teach the voiceprint. --person-id N: the speaker is person N (the print learns
-    /// from it). --new-person: a person with this voice. Neither: relabel only. The mic track of a bleed meeting never feeds a print.
-    private static func renameSpeaker(_ db: StoreDB, speakerID: Int, name: String, personID: Int?, newPerson: Bool) throws -> [Int] {
+    /// from it). --new-person: a person with this voice. --me: the user (the enrolled person, made from this voice when there is
+    /// none yet). None: relabel only. The mic track of a bleed meeting never feeds a print.
+    private static func renameSpeaker(_ db: StoreDB, speakerID: Int, name: String, personID: Int?, newPerson: Bool, me: Bool = false) throws -> [Int] {
         let name = PyText.strip(name)
         guard let row = try db.rows("SELECT s.track, s.kind, s.person_id, s.embedding, m.bleed FROM speakers s JOIN meetings m ON m.id = s.meeting_id"
                                     + " WHERE s.id = ?", [speakerID]).first else { throw StoreError("no speaker \(speakerID)") }
@@ -125,7 +126,14 @@ enum StoreCommands {
         let emb = try row.data(3).map(StoreVoiceprint.vec)
         let learn = emb != nil && !((row.int(4) ?? 0) != 0 && row.text(0) == "mic")
         var pid = personID
-        if newPerson {
+        if me {
+            if let existing = try db.rows("SELECT id FROM people WHERE is_me = 1 ORDER BY id LIMIT 1").first?.int(0) {
+                pid = existing
+                if learn, row.int(2) != existing, let e = emb { try StoreVoiceprint.update(db, personID: existing, embedding: e) }
+            } else {
+                pid = try StoreVoiceprint.addPerson(db, name: name, embedding: learn ? emb : nil, isMe: true)
+            }
+        } else if newPerson {
             pid = try StoreVoiceprint.addPerson(db, name: name, embedding: learn ? emb : nil)
         } else if let p = pid {
             if try db.rows("SELECT 1 FROM people WHERE id = ?", [p]).isEmpty { throw StoreError("no person \(p)") }

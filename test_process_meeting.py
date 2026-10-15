@@ -908,8 +908,28 @@ with Env() as E:
     fails("rename-speaker", "999", "X", *C(E), contains="no speaker 999")
     fails("rename-speaker", str(s_oth), "  ", *C(E), contains="empty name")
     fails("rename-speaker", str(s_oth), "X", "--person-id", "999", *C(E), contains="no person 999")
-    fails("rename-speaker", str(s_oth), "X", "--person-id", str(pid), "--new-person", *C(E), contains="either --person-id or --new-person")
+    fails("rename-speaker", str(s_oth), "X", "--person-id", str(pid), "--new-person", *C(E), contains="only one of --person-id, --new-person and --me")
+    fails("rename-speaker", str(s_oth), "X", "--me", "--new-person", *C(E), contains="only one of --person-id, --new-person and --me")
     assert person(E, pid) is not None and E.db().execute("SELECT COUNT(*) FROM people").fetchone()[0] == 4  # failures made no people
+
+# ---------- rename-speaker --me: "Is this you?" ----------
+with Env() as E:
+    # nobody enrolled: the first --me makes the user from this voice, so later meetings name them by voiceprint
+    mid, (m_a, m_b) = seed(E, spk=[("mic", "Speaker 1", "new", None, basis(0)), ("mic", "Speaker 2", "new", None, basis(3))])
+    ok("rename-speaker", str(m_a), "Fahad", "--me", *C(E))
+    sp = E.meeting({"meeting_id": mid})["speakers"][0]
+    p = person(E, sp["person_id"]); assert p["is_me"] and p["name"] == "Fahad" and p["n"] == 1 and sp["label"] == "Fahad"
+    assert speakers.match(basis(0), E.db(), include_me=True)[0] == p["id"]
+    # enrolled already: --me links to that person and learns, no second user
+    mid2, (m2,) = seed(E, title="Later", start="2026-10-09T09:00:00+05:00", spk=[("mic", "Speaker 1", "new", None, (basis(0) * 0.9 + basis(2) * 0.1).astype(np.float32))])
+    ok("rename-speaker", str(m2), "Fahad", "--me", *C(E))
+    assert E.meeting({"meeting_id": mid2})["speakers"][0]["person_id"] == p["id"] and person(E, p["id"])["n"] == 2
+    assert E.db().execute("SELECT COUNT(*) FROM people WHERE is_me = 1").fetchone()[0] == 1
+with Env() as E:
+    # a meeting on speakers: the user is made and linked, but the bleed mic track teaches no voiceprint
+    bm, (b_mic,) = seed(E, bleed=True, spk=[("mic", "Speaker 1", "new", None, basis(4))])
+    ok("rename-speaker", str(b_mic), "Fahad", "--me", *C(E))
+    p = person(E, E.meeting({"meeting_id": bm})["speakers"][0]["person_id"]); assert p["is_me"] and p["voiceprint"] is None and p["n"] == 0
 
 # ---------- rename-speaker on an introduction-named speaker (kind "intro"): "Save <name>'s voice" ----------
 with Env() as E:

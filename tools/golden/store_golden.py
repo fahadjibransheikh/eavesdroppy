@@ -165,7 +165,12 @@ CASES = [
     # kind "intro" (named from an introduction, unlinked): any rename settles it to "new"; --new-person / --person-id also learn the voice
     {"name": "rename_speaker_intro", "setup_sql": ["UPDATE speakers SET kind = 'intro', person_id = NULL WHERE id IN (2, 3, 6)"], "steps": [
         S("rename-speaker", "2", "Marcus", "--new-person"), S("rename-speaker", "3", "Priya", "--person-id", "2"), S("rename-speaker", "6", "Pat")]},
+    # --me: the enrolled user when there is one (learns the voice), else a new is_me person made from this voice (none from a bleed mic track)
+    {"name": "rename_speaker_me", "steps": [S("rename-speaker", "3", "Fahad", "--me"), S("rename-speaker", "5", "Fahad", "--me")]},
+    {"name": "rename_speaker_me_first", "setup_sql": ["DELETE FROM people WHERE is_me = 1"], "steps": [
+        S("rename-speaker", "5", "Fahad", "--me"), S("rename-speaker", "3", "Fahad", "--me")]},
     {"name": "rename_speaker_errors", "steps": [
+        S("rename-speaker", "2", "x", "--me", "--new-person"), S("rename-speaker", "2", "x", "--me", "--person-id", "2"),
         S("rename-speaker", "999", "x"), S("rename-speaker", "999", ""), S("rename-speaker", "2", "  "), S("rename-speaker", "2", "x", "--person-id", "2", "--new-person"),
         S("rename-speaker", "2", "x", "--person-id", "999"), S("rename-speaker", "2")]},
     {"name": "set_user_notes", "steps": [

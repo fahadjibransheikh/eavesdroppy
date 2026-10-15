@@ -860,10 +860,11 @@ def cmd_rename_meeting(a):
 
 def cmd_rename_speaker(a):
     """Relabel one meeting's speaker and teach the voiceprint. --person-id N: the speaker is person N (print learns
-    from it). --new-person: create a person with this voice. Neither: relabel only (a speaker already linked to a
+    from it). --new-person: create a person with this voice. --me: the user (the enrolled person, made from this voice
+    when there is none yet). None: relabel only (a speaker already linked to a
     person keeps that link; the person is not renamed). The mic track of a bleed meeting never feeds a print."""
-    if a.person_id is not None and a.new_person:
-        raise Fail("use either --person-id or --new-person, not both")
+    if sum([a.person_id is not None, a.new_person, a.me]) > 1:
+        raise Fail("use only one of --person-id, --new-person and --me")
     name = (a.name or "").strip()
     with library_db(a.container) as (db, _):
         row = db.execute("SELECT s.track, s.kind, s.person_id, s.embedding, m.bleed FROM speakers s"
@@ -875,7 +876,15 @@ def cmd_rename_speaker(a):
         emb = None if row["embedding"] is None else speakers._vec(row["embedding"])
         learn = emb is not None and not (row["bleed"] and row["track"] == "mic")
         pid = a.person_id
-        if a.new_person:
+        if a.me:
+            me = db.execute("SELECT id FROM people WHERE is_me = 1 ORDER BY id LIMIT 1").fetchone()
+            if me:
+                pid = me[0]
+                if learn and row["person_id"] != pid:
+                    speakers.confirm_speaker(db, pid, emb)
+            else:
+                pid = speakers.add_person(db, name, emb if learn else None, is_me=True)
+        elif a.new_person:
             pid = speakers.add_person(db, name, emb if learn else None)
         elif pid is not None:
             if not db.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone():
@@ -1064,7 +1073,7 @@ def build_parser():
     cmd("process", cmd_process, arg("session_dir"))
     cmd("rename-meeting", cmd_rename_meeting, arg("id", type=int), arg("title"))
     cmd("rename-speaker", cmd_rename_speaker, arg("speaker_id", type=int), arg("name"),
-        arg("--person-id", type=int), arg("--new-person", action="store_true"))
+        arg("--person-id", type=int), arg("--new-person", action="store_true"), arg("--me", action="store_true"))
     cmd("regenerate", cmd_regenerate, arg("id", type=int), arg("--template"), arg("--custom-text-file"))
     cmd("set-user-notes", cmd_set_user_notes, arg("id", type=int), arg("--clear", action="store_true"))
     cmd("ask", cmd_ask, arg("question"), arg("--meeting-id", type=int), arg("--person-id", type=int))

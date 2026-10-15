@@ -171,7 +171,11 @@ struct InputDevice: Equatable, CustomStringConvertible {
     /// The device `engine`'s input node is bound to (the system default unless the node says otherwise), with the node's format.
     static func of(_ engine: AVAudioEngine) -> InputDevice {
         var dev = engine.inputNode.auAudioUnit.deviceID
-        if dev == kAudioObjectUnknown { dev = CallAudio.defaultInputDevice() }
+        // macOS 26 binds the node to a private "CADefaultDeviceAggregate-…" wrapper around the default input; its id never
+        // equals the default device's, so comparing it made every enrollment look like a microphone change. Use the real one.
+        if dev == kAudioObjectUnknown || (string(dev, kAudioDevicePropertyDeviceUID) ?? "").hasPrefix("CADefaultDeviceAggregate") {
+            dev = CallAudio.defaultInputDevice()
+        }
         let f = engine.inputNode.outputFormat(forBus: 0)
         return InputDevice(id: dev, name: string(dev, kAudioObjectPropertyName) ?? "unknown", uid: string(dev, kAudioDevicePropertyDeviceUID) ?? "",
                            rate: f.sampleRate, channels: Int(f.channelCount))
